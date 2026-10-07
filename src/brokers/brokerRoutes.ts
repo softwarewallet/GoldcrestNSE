@@ -1196,6 +1196,7 @@ brokerRouter.post('/order', async (req: Request, res: Response) => {
       reservationToken = reservation.reservationToken;
       orderReq.firstLiveReservationToken = reservationToken;
       orderReq._firstLiveIdempotencyKey = idempotencyKey;
+      orderReq._firstLiveCorrelationId = correlationId;
     }
 
     let placedOrder;

@@ -304,7 +304,8 @@ export class FirstLiveService {
 
       const now = Date.now();
       const reservationToken = `fl-res-${crypto.randomBytes(32).toString('hex')}`;
-      const fingerprint = generateFirstLiveFingerprint(orderRequest);
+      const fingerprint = generateFirstLiveFingerprint(orderRequest, idempotencyKey, correlationId);
+      const reservationTokenHash = hashReservationToken(reservationToken);
 
       const newCount = Math.max(1, submitted + 1);
 
@@ -326,8 +327,8 @@ export class FirstLiveService {
           symbol, side, quantity, requested_price, status, attempted_at, payload_json
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
-          reservationToken,
-          reservationToken,
+          reservationTokenHash,
+          reservationTokenHash,
           fingerprint,
           correlationId,
           idempotencyKey,
@@ -340,7 +341,7 @@ export class FirstLiveService {
           orderRequest.price || 0,
           'RESERVED',
           now,
-          JSON.stringify({ correlationId, idempotencyKey, orderRequest, reservationToken, reservedAt: now, fingerprint })
+          JSON.stringify({ correlationId, idempotencyKey, orderRequest, reservationTokenHash, reservedAt: now, fingerprint })
         ]
       );
 
@@ -394,6 +395,8 @@ export class FirstLiveService {
     const config = getSystemConfig();
     const newCount = Math.max(1, config.firstLiveOrdersSubmitted || 0);
 
+    const tokenHash = hashReservationToken(reservationToken);
+
     await executeTransaction((db) => {
       const updateSetting = (key: string, value: string) => {
         db.run(
@@ -414,8 +417,8 @@ export class FirstLiveService {
           brokerOrderId || null,
           now,
           JSON.stringify({ error, result, finalizedAt: now }),
-          reservationToken,
-          reservationToken
+          tokenHash,
+          tokenHash
         ]
       );
     });
@@ -468,27 +471,50 @@ export class FirstLiveService {
   }
 }
 
-export function generateFirstLiveFingerprint(orderRequest: OrderRequest): string {
-  const broker = (orderRequest as any).broker || 'FIVE_PAISA';
+export function hashReservationToken(token: string): string {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+export function generateFirstLiveFingerprint(
+  orderRequest: OrderRequest,
+  idempotencyKey: string,
+  correlationId: string
+): string {
+  const broker = String((orderRequest as any).broker || 'FIVE_PAISA').toUpperCase();
   const environment = 'LIVE';
-  const market = orderRequest.market || 'INDIAN_OPTIONS';
-  const symbol = orderRequest.symbol || '';
-  const side = orderRequest.side || 'BUY';
-  const orderType = orderRequest.orderType || 'LIMIT';
+  const market = String(orderRequest.market || 'INDIAN_OPTIONS').toUpperCase();
+  const symbol = String(orderRequest.symbol || '').trim();
+  const side = String(orderRequest.side || 'BUY').toUpperCase();
+  const orderType = String(orderRequest.orderType || 'LIMIT').toUpperCase();
   const quantity = Number(orderRequest.quantity || 0);
   const price = Number(orderRequest.price || 0);
 
-  const canonicalString = [
-    broker,
-    environment,
-    market,
-    symbol,
-    side,
-    orderType,
-    quantity,
-    price
-  ].join('|');
+  const stopLossStr = orderRequest.stopLoss !== undefined && orderRequest.stopLoss !== null
+    ? String(Number(orderRequest.stopLoss))
+    : 'NULL';
+  const takeProfitStr = orderRequest.takeProfit !== undefined && orderRequest.takeProfit !== null
+    ? String(Number(orderRequest.takeProfit))
+    : 'NULL';
 
+  const idemKey = String(idempotencyKey || '').trim();
+  const corrId = String(correlationId || '').trim();
+
+  const parts = [
+    `broker=${broker}`,
+    `environment=${environment}`,
+    `market=${market}`,
+    `symbol=${symbol}`,
+    `side=${side}`,
+    `orderType=${orderType}`,
+    `quantity=${quantity}`,
+    `price=${price}`,
+    `stopLoss=${stopLossStr}`,
+    `takeProfit=${takeProfitStr}`,
+    `idempotencyKey=${idemKey}`,
+    `correlationId=${corrId}`
+  ];
+
+  const canonicalString = parts.join('|');
   return crypto.createHash('sha256').update(canonicalString).digest('hex');
 }
 

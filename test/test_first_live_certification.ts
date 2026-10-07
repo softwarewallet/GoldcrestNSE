@@ -1,11 +1,11 @@
 import crypto from 'crypto';
-import { firstLiveService } from '../src/services/firstLiveService';
+import { firstLiveService, hashReservationToken, generateFirstLiveFingerprint } from '../src/services/firstLiveService';
 import { getSystemConfig, updateSystemConfig } from '../src/services/configService';
 import { killSwitch } from '../src/brokers/safety/KillSwitch';
 import { FivePaisaLiveAdapter } from '../src/brokers/adapters/fivepaisa/FivePaisaLiveAdapter';
 import { FivePaisaBrokerAdapter } from '../src/brokers/adapters/fivepaisa/FivePaisaBrokerAdapter';
 import { liveTradingGate } from '../src/brokers/safety/LiveTradingGate';
-import { executeRun, executeQuery, resetDatabaseInstanceForTesting } from '../src/database/db';
+import { executeRun, executeQuery, executeTransaction, resetDatabaseInstanceForTesting } from '../src/database/db';
 import fs from 'fs';
 import path from 'path';
 
@@ -222,7 +222,8 @@ async function runFirstLiveCertificationTests() {
       quantity: 25,
       price: 50,
       firstLiveReservationToken: reservation1.reservationToken,
-      _firstLiveIdempotencyKey: 'test-idem-success'
+      _firstLiveIdempotencyKey: 'test-idem-success',
+      _firstLiveCorrelationId: 'test-corr-success'
     } as any);
   } catch (err: any) {
     if (err.message.includes('FIRST_LIVE_ORDER_NOT_AUTHORIZED') && err.message.includes('symbol mismatch')) {
@@ -247,7 +248,8 @@ async function runFirstLiveCertificationTests() {
       quantity: 25,
       price: 50,
       firstLiveReservationToken: reservation1.reservationToken,
-      _firstLiveIdempotencyKey: 'test-idem-success'
+      _firstLiveIdempotencyKey: 'test-idem-success',
+      _firstLiveCorrelationId: 'test-corr-success'
     } as any);
   } catch (err: any) {
     if (err.message.includes('FIRST_LIVE_ORDER_NOT_AUTHORIZED') && err.message.includes('side mismatch')) {
@@ -270,7 +272,8 @@ async function runFirstLiveCertificationTests() {
       quantity: 50, // Reservation quantity was 25
       price: 50,
       firstLiveReservationToken: reservation1.reservationToken,
-      _firstLiveIdempotencyKey: 'test-idem-success'
+      _firstLiveIdempotencyKey: 'test-idem-success',
+      _firstLiveCorrelationId: 'test-corr-success'
     } as any);
   } catch (err: any) {
     if (err.message.includes('FIRST_LIVE_ORDER_NOT_AUTHORIZED') && err.message.includes('quantity mismatch')) {
@@ -293,7 +296,8 @@ async function runFirstLiveCertificationTests() {
       quantity: 25,
       price: 50,
       firstLiveReservationToken: reservation1.reservationToken,
-      _firstLiveIdempotencyKey: 'test-idem-different' // Reservation key was test-idem-success
+      _firstLiveIdempotencyKey: 'test-idem-different', // Reservation key was test-idem-success
+      _firstLiveCorrelationId: 'test-corr-success'
     } as any);
   } catch (err: any) {
     if (err.message.includes('FIRST_LIVE_ORDER_NOT_AUTHORIZED') && err.message.includes('idempotency key mismatch')) {
@@ -317,7 +321,8 @@ async function runFirstLiveCertificationTests() {
       quantity: 25,
       price: 50,
       firstLiveReservationToken: tamperedToken,
-      _firstLiveIdempotencyKey: 'test-idem-success'
+      _firstLiveIdempotencyKey: 'test-idem-success',
+      _firstLiveCorrelationId: 'test-corr-success'
     } as any);
   } catch (err: any) {
     if (err.message.includes('FIRST_LIVE_ORDER_NOT_AUTHORIZED') && err.message.includes('invalid')) {
@@ -340,7 +345,8 @@ async function runFirstLiveCertificationTests() {
       quantity: 25,
       price: 100, // Reservation price was 50 (mismatch triggers fingerprint mismatch!)
       firstLiveReservationToken: reservation1.reservationToken,
-      _firstLiveIdempotencyKey: 'test-idem-success'
+      _firstLiveIdempotencyKey: 'test-idem-success',
+      _firstLiveCorrelationId: 'test-corr-success'
     } as any);
   } catch (err: any) {
     if (err.message.includes('FIRST_LIVE_ORDER_NOT_AUTHORIZED') && err.message.includes('fingerprint mismatch')) {
@@ -352,6 +358,154 @@ async function runFirstLiveCertificationTests() {
   if (!test7Caught) throw new Error('FAILED TEST 7: Allowed placeOrder with wrong price (fingerprint mismatch)!');
   if (fetchCallsCount > 0) throw new Error('FAILED TEST 7: Network call made on fingerprint mismatch!');
   console.log('  ✓ TEST 7: Fingerprint/Price Mismatch blocked cleanly with 0 broker calls.');
+
+  // TEST 8 — Wrong Market
+  fetchCallsCount = 0;
+  let test8Caught = false;
+  try {
+    await adapter.placeOrder({
+      market: 'FOREX', // Reservation market was INDIAN_OPTIONS
+      symbol: 'NIFTY26OCT23500CE',
+      side: 'BUY',
+      orderType: 'LIMIT',
+      quantity: 25,
+      price: 50,
+      firstLiveReservationToken: reservation1.reservationToken,
+      _firstLiveIdempotencyKey: 'test-idem-success',
+      _firstLiveCorrelationId: 'test-corr-success'
+    } as any);
+  } catch (err: any) {
+    if (err.message.includes('FIRST_LIVE_ORDER_NOT_AUTHORIZED') && err.message.includes('fingerprint mismatch')) {
+      test8Caught = true;
+    }
+  }
+  if (!test8Caught) throw new Error('FAILED TEST 8: Allowed placeOrder with wrong market!');
+  console.log('  ✓ TEST 8: Wrong Market blocked cleanly.');
+
+  // TEST 9 — Wrong OrderType
+  fetchCallsCount = 0;
+  let test9Caught = false;
+  try {
+    await adapter.placeOrder({
+      market: 'INDIAN_OPTIONS',
+      symbol: 'NIFTY26OCT23500CE',
+      side: 'BUY',
+      orderType: 'MARKET', // Reservation orderType was LIMIT
+      quantity: 25,
+      price: 50,
+      firstLiveReservationToken: reservation1.reservationToken,
+      _firstLiveIdempotencyKey: 'test-idem-success',
+      _firstLiveCorrelationId: 'test-corr-success'
+    } as any);
+  } catch (err: any) {
+    if (err.message.includes('FIRST_LIVE_ORDER_NOT_AUTHORIZED') && err.message.includes('fingerprint mismatch')) {
+      test9Caught = true;
+    }
+  }
+  if (!test9Caught) throw new Error('FAILED TEST 9: Allowed placeOrder with wrong orderType!');
+  console.log('  ✓ TEST 9: Wrong OrderType blocked cleanly.');
+
+  // TEST 10 — Wrong Correlation ID
+  fetchCallsCount = 0;
+  let test10Caught = false;
+  try {
+    await adapter.placeOrder({
+      market: 'INDIAN_OPTIONS',
+      symbol: 'NIFTY26OCT23500CE',
+      side: 'BUY',
+      orderType: 'LIMIT',
+      quantity: 25,
+      price: 50,
+      firstLiveReservationToken: reservation1.reservationToken,
+      _firstLiveIdempotencyKey: 'test-idem-success',
+      _firstLiveCorrelationId: 'test-corr-wrong' // Reservation correlation_id was test-corr-success
+    } as any);
+  } catch (err: any) {
+    if (err.message.includes('FIRST_LIVE_ORDER_NOT_AUTHORIZED') && err.message.includes('correlation ID mismatch')) {
+      test10Caught = true;
+    }
+  }
+  if (!test10Caught) throw new Error('FAILED TEST 10: Allowed placeOrder with wrong correlation ID!');
+  console.log('  ✓ TEST 10: Wrong Correlation ID blocked cleanly.');
+
+  // TEST 11 — Optional Field Injection (SL absent -> attacker supplies SL)
+  fetchCallsCount = 0;
+  let test11Caught = false;
+  try {
+    await adapter.placeOrder({
+      market: 'INDIAN_OPTIONS',
+      symbol: 'NIFTY26OCT23500CE',
+      side: 'BUY',
+      orderType: 'LIMIT',
+      quantity: 25,
+      price: 50,
+      stopLoss: 10, // reservation had stopLoss: undefined
+      firstLiveReservationToken: reservation1.reservationToken,
+      _firstLiveIdempotencyKey: 'test-idem-success',
+      _firstLiveCorrelationId: 'test-corr-success'
+    } as any);
+  } catch (err: any) {
+    if (err.message.includes('FIRST_LIVE_ORDER_NOT_AUTHORIZED') && err.message.includes('stopLoss mismatch')) {
+      test11Caught = true;
+    }
+  }
+  if (!test11Caught) throw new Error('FAILED TEST 11: Allowed placeOrder with optional field injection!');
+  console.log('  ✓ TEST 11: Optional Field Injection blocked cleanly.');
+
+  // TEST 12 — Missing Fingerprint in Database
+  fetchCallsCount = 0;
+  let test12Caught = false;
+  const tokenHash = hashReservationToken(reservation1.reservationToken);
+  // Nullify fingerprint inside the database
+  await executeRun("UPDATE first_live_ledger SET fingerprint = NULL WHERE id = ?", [tokenHash]);
+  try {
+    await adapter.placeOrder({
+      market: 'INDIAN_OPTIONS',
+      symbol: 'NIFTY26OCT23500CE',
+      side: 'BUY',
+      orderType: 'LIMIT',
+      quantity: 25,
+      price: 50,
+      firstLiveReservationToken: reservation1.reservationToken,
+      _firstLiveIdempotencyKey: 'test-idem-success',
+      _firstLiveCorrelationId: 'test-corr-success'
+    } as any);
+  } catch (err: any) {
+    if (err.message.includes('FIRST_LIVE_ORDER_NOT_AUTHORIZED') && err.message.includes('Fingerprint is missing')) {
+      test12Caught = true;
+    }
+  }
+  if (!test12Caught) throw new Error('FAILED TEST 12: Allowed placeOrder with missing fingerprint in DB!');
+  console.log('  ✓ TEST 12: Missing Fingerprint blocked cleanly (fail-closed).');
+
+  // TEST 13 — Malformed Fingerprint in Database
+  fetchCallsCount = 0;
+  let test13Caught = false;
+  // Set malformed fingerprint in DB
+  await executeRun("UPDATE first_live_ledger SET fingerprint = 'short-malformed' WHERE id = ?", [tokenHash]);
+  try {
+    await adapter.placeOrder({
+      market: 'INDIAN_OPTIONS',
+      symbol: 'NIFTY26OCT23500CE',
+      side: 'BUY',
+      orderType: 'LIMIT',
+      quantity: 25,
+      price: 50,
+      firstLiveReservationToken: reservation1.reservationToken,
+      _firstLiveIdempotencyKey: 'test-idem-success',
+      _firstLiveCorrelationId: 'test-corr-success'
+    } as any);
+  } catch (err: any) {
+    if (err.message.includes('FIRST_LIVE_ORDER_NOT_AUTHORIZED') && err.message.includes('Fingerprint is missing or malformed')) {
+      test13Caught = true;
+    }
+  }
+  if (!test13Caught) throw new Error('FAILED TEST 13: Allowed placeOrder with malformed fingerprint in DB!');
+  console.log('  ✓ TEST 13: Malformed Fingerprint blocked cleanly (fail-closed).');
+
+  // Restore the correct fingerprint for subsequent tests
+  const correctFingerprint = generateFirstLiveFingerprint(validOrderRequest, 'test-idem-success', 'test-corr-success');
+  await executeRun("UPDATE first_live_ledger SET fingerprint = ? WHERE id = ?", [correctFingerprint, tokenHash]);
 
   // ----------------------------------------------------------------
   // G. Reserved order passes adapter interlock
@@ -372,7 +526,8 @@ async function runFirstLiveCertificationTests() {
   const allowedOrder = {
     ...validOrderRequest,
     firstLiveReservationToken: reservation1.reservationToken,
-    _firstLiveIdempotencyKey: 'test-idem-success'
+    _firstLiveIdempotencyKey: 'test-idem-success',
+    _firstLiveCorrelationId: 'test-corr-success'
   };
 
   fetchCallsCount = 0;
@@ -446,7 +601,8 @@ async function runFirstLiveCertificationTests() {
     await adapter.placeOrder({
       ...validOrderRequest,
       firstLiveReservationToken: reservationFail.reservationToken,
-      _firstLiveIdempotencyKey: 'test-idem-fail'
+      _firstLiveIdempotencyKey: 'test-idem-fail',
+      _firstLiveCorrelationId: 'test-corr-fail'
     });
   } catch (err) {
     submissionErrorCaught = true;
@@ -503,6 +659,244 @@ async function runFirstLiveCertificationTests() {
     throw new Error('FAILED: Lock state was not preserved across database reset/re-read.');
   }
   console.log('  ✓ [L] Persistent lock state correctly verified across re-read.');
+
+  // ----------------------------------------------------------------
+  // Optional Field Removal / Modification Tests (Section 4 & 10)
+  // ----------------------------------------------------------------
+  console.log('\n[SL/TP Mismatch] Testing SL/TP removal and modifications...');
+
+  // Setup a reservation with SL/TP
+  await executeRun("UPDATE system_settings SET value = 'FIRST_LIVE_CERTIFICATION' WHERE key = 'EXECUTION_MODE'");
+  await executeRun("UPDATE system_settings SET value = 'true' WHERE key = 'FIRST_LIVE_ARMED'");
+  await executeRun("UPDATE system_settings SET value = '0' WHERE key = 'FIRST_LIVE_ORDERS_SUBMITTED'");
+  await executeRun("UPDATE system_settings SET value = 'false' WHERE key = 'FIRST_LIVE_LOCKED'");
+  updateSystemConfig({
+    executionMode: 'FIRST_LIVE_CERTIFICATION',
+    firstLiveArmed: true,
+    firstLiveOrdersSubmitted: 0,
+    firstLiveLocked: false
+  });
+  await executeRun('DELETE FROM first_live_ledger');
+
+  const orderWithSLTP = {
+    ...validOrderRequest,
+    stopLoss: 10,
+    takeProfit: 20
+  };
+
+  const reservationWithSLTP = await firstLiveService.reserveFirstLiveOrder({
+    correlationId: 'sltp-corr',
+    idempotencyKey: 'sltp-idem',
+    orderRequest: orderWithSLTP
+  });
+
+  if (!reservationWithSLTP.success || !reservationWithSLTP.reservationToken) {
+    throw new Error('FAILED: Failed to create reservation with SL/TP.');
+  }
+
+  // TEST 14 — Optional Field Removal (Original SL/TP supplied -> attacker removes SL)
+  fetchCallsCount = 0;
+  let test14Caught = false;
+  try {
+    await adapter.placeOrder({
+      ...validOrderRequest, // validOrderRequest does NOT have stopLoss/takeProfit
+      firstLiveReservationToken: reservationWithSLTP.reservationToken,
+      _firstLiveIdempotencyKey: 'sltp-idem',
+      _firstLiveCorrelationId: 'sltp-corr'
+    } as any);
+  } catch (err: any) {
+    if (err.message.includes('FIRST_LIVE_ORDER_NOT_AUTHORIZED') && err.message.includes('stopLoss mismatch')) {
+      test14Caught = true;
+    }
+  }
+  if (!test14Caught) throw new Error('FAILED TEST 14: Allowed placeOrder when stopLoss was removed!');
+  if (fetchCallsCount > 0) throw new Error('FAILED TEST 14: Network call made on stopLoss removal!');
+  console.log('  ✓ TEST 14: StopLoss Removal blocked cleanly with 0 broker calls.');
+
+  // TEST 15 — Optional Field Modification (Original SL/TP supplied -> attacker modifies SL)
+  fetchCallsCount = 0;
+  let test15Caught = false;
+  try {
+    await adapter.placeOrder({
+      ...orderWithSLTP,
+      stopLoss: 15, // original SL was 10
+      firstLiveReservationToken: reservationWithSLTP.reservationToken,
+      _firstLiveIdempotencyKey: 'sltp-idem',
+      _firstLiveCorrelationId: 'sltp-corr'
+    } as any);
+  } catch (err: any) {
+    if (err.message.includes('FIRST_LIVE_ORDER_NOT_AUTHORIZED') && err.message.includes('stopLoss mismatch')) {
+      test15Caught = true;
+    }
+  }
+  if (!test15Caught) throw new Error('FAILED TEST 15: Allowed placeOrder when stopLoss was modified!');
+  if (fetchCallsCount > 0) throw new Error('FAILED TEST 15: Network call made on stopLoss modification!');
+  console.log('  ✓ TEST 15: StopLoss Modification blocked cleanly with 0 broker calls.');
+
+  // ----------------------------------------------------------------
+  // Concurrency Certification (Section 13)
+  // ----------------------------------------------------------------
+  console.log('\n[Concurrency] Launching simultaneous reservation attempts...');
+
+  // Reset to armed
+  await executeRun("UPDATE system_settings SET value = 'FIRST_LIVE_CERTIFICATION' WHERE key = 'EXECUTION_MODE'");
+  await executeRun("UPDATE system_settings SET value = 'true' WHERE key = 'FIRST_LIVE_ARMED'");
+  await executeRun("UPDATE system_settings SET value = '0' WHERE key = 'FIRST_LIVE_ORDERS_SUBMITTED'");
+  await executeRun("UPDATE system_settings SET value = 'false' WHERE key = 'FIRST_LIVE_LOCKED'");
+  updateSystemConfig({
+    executionMode: 'FIRST_LIVE_CERTIFICATION',
+    firstLiveArmed: true,
+    firstLiveOrdersSubmitted: 0,
+    firstLiveLocked: false
+  });
+  await executeRun('DELETE FROM first_live_ledger');
+
+  const concurrentAttempts = Array.from({ length: 10 }, (_, i) =>
+    firstLiveService.reserveFirstLiveOrder({
+      correlationId: `concur-corr-${i}`,
+      idempotencyKey: `concur-idem-${i}`,
+      orderRequest: validOrderRequest
+    })
+  );
+
+  const concurResults = await Promise.all(concurrentAttempts);
+  const concurSuccesses = concurResults.filter(r => r.success);
+  if (concurSuccesses.length !== 1) {
+    throw new Error(`FAILED CONCURRENCY: Simultaneous attempts resulted in ${concurSuccesses.length} successful reservations (expected exactly 1).`);
+  }
+
+  const concurRows = await executeQuery<any>("SELECT COUNT(*) as cnt FROM first_live_ledger WHERE status = 'RESERVED'");
+  if (Number(concurRows[0]?.cnt || 0) !== 1) {
+    throw new Error(`FAILED CONCURRENCY: Simultaneous attempts created ${concurRows[0]?.cnt} RESERVED ledger rows (expected exactly 1).`);
+  }
+  console.log('  ✓ Strengthened Concurrency verified successfully (exactly 1 reservation, exactly 1 row).');
+
+  // ----------------------------------------------------------------
+  // Rollback Certification (Section 11)
+  // ----------------------------------------------------------------
+  console.log('\n[Rollback] Testing genuine transaction rollback...');
+
+  // Reset to armed
+  await executeRun("UPDATE system_settings SET value = 'FIRST_LIVE_CERTIFICATION' WHERE key = 'EXECUTION_MODE'");
+  await executeRun("UPDATE system_settings SET value = 'true' WHERE key = 'FIRST_LIVE_ARMED'");
+  await executeRun("UPDATE system_settings SET value = '0' WHERE key = 'FIRST_LIVE_ORDERS_SUBMITTED'");
+  await executeRun("UPDATE system_settings SET value = 'false' WHERE key = 'FIRST_LIVE_LOCKED'");
+  updateSystemConfig({
+    executionMode: 'FIRST_LIVE_CERTIFICATION',
+    firstLiveArmed: true,
+    firstLiveOrdersSubmitted: 0,
+    firstLiveLocked: false
+  });
+  await executeRun('DELETE FROM first_live_ledger');
+
+  let rollbackErrorCaught = false;
+  try {
+    await executeTransaction((db) => {
+      // 1. Change system settings
+      db.run("INSERT OR REPLACE INTO system_settings (key, value, updated_at) VALUES (?, ?, ?)", ['FIRST_LIVE_LOCKED', 'true', Date.now()]);
+      db.run("INSERT OR REPLACE INTO system_settings (key, value, updated_at) VALUES (?, ?, ?)", ['FIRST_LIVE_ORDERS_SUBMITTED', '1', Date.now()]);
+
+      // 2. Insert ledger row
+      db.run(
+        `INSERT INTO first_live_ledger (
+          id, reservation_token, fingerprint, correlation_id, idempotency_key, broker, environment, execution_mode,
+          symbol, side, quantity, requested_price, status, attempted_at, payload_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          'rollback-token-hash', 'rollback-token-hash', 'rollback-fingerprint', 'corr-rollback', 'idem-rollback',
+          'FIVE_PAISA', 'LIVE', 'FIRST_LIVE_CERTIFICATION', 'NIFTY26OCT23500CE', 'BUY', 25, 50, 'RESERVED', Date.now(), '{}'
+        ]
+      );
+
+      // 3. Intentionally throw error before COMMIT
+      throw new Error('INTENTIONAL_ROLLBACK_FAILURE');
+    });
+  } catch (err: any) {
+    if (err.message === 'INTENTIONAL_ROLLBACK_FAILURE') {
+      rollbackErrorCaught = true;
+    }
+  }
+
+  if (!rollbackErrorCaught) {
+    throw new Error('FAILED ROLLBACK TEST: Intentionally failed transaction did not throw.');
+  }
+
+  // Verify state restored
+  const rollbackLockedRow = await executeQuery<any>("SELECT value FROM system_settings WHERE key = 'FIRST_LIVE_LOCKED'");
+  if (rollbackLockedRow[0]?.value === 'true') {
+    throw new Error('FAILED ROLLBACK TEST: FIRST_LIVE_LOCKED was not rolled back (still true).');
+  }
+
+  const rollbackSubmittedRow = await executeQuery<any>("SELECT value FROM system_settings WHERE key = 'FIRST_LIVE_ORDERS_SUBMITTED'");
+  if (rollbackSubmittedRow[0]?.value === '1') {
+    throw new Error('FAILED ROLLBACK TEST: FIRST_LIVE_ORDERS_SUBMITTED was not rolled back (still 1).');
+  }
+
+  const rollbackLedgerCount = await executeQuery<any>("SELECT COUNT(*) as cnt FROM first_live_ledger WHERE id = 'rollback-token-hash'");
+  if (Number(rollbackLedgerCount[0]?.cnt || 0) !== 0) {
+    throw new Error('FAILED ROLLBACK TEST: Ledger row was not rolled back.');
+  }
+
+  console.log('  ✓ Genuine SQLite transaction rollback verified successfully.');
+
+  // ----------------------------------------------------------------
+  // Crash/Restart Certification (Section 12)
+  // ----------------------------------------------------------------
+  console.log('\n[Crash/Restart] Testing database crash/restart recovery...');
+
+  // Reset to armed
+  await executeRun("UPDATE system_settings SET value = 'FIRST_LIVE_CERTIFICATION' WHERE key = 'EXECUTION_MODE'");
+  await executeRun("UPDATE system_settings SET value = 'true' WHERE key = 'FIRST_LIVE_ARMED'");
+  await executeRun("UPDATE system_settings SET value = '0' WHERE key = 'FIRST_LIVE_ORDERS_SUBMITTED'");
+  await executeRun("UPDATE system_settings SET value = 'false' WHERE key = 'FIRST_LIVE_LOCKED'");
+  updateSystemConfig({
+    executionMode: 'FIRST_LIVE_CERTIFICATION',
+    firstLiveArmed: true,
+    firstLiveOrdersSubmitted: 0,
+    firstLiveLocked: false
+  });
+  await executeRun('DELETE FROM first_live_ledger');
+
+  // 1. Reserve
+  const crashReservation = await firstLiveService.reserveFirstLiveOrder({
+    correlationId: 'crash-corr',
+    idempotencyKey: 'crash-idem',
+    orderRequest: validOrderRequest
+  });
+
+  if (!crashReservation.success || !crashReservation.reservationToken) {
+    throw new Error('FAILED CRASH TEST: Failed to create initial reservation.');
+  }
+
+  // 2. Simulate process crash by closing and reinitializing database connection
+  resetDatabaseInstanceForTesting();
+
+  // 3. Reload service status and verify states
+  const statusAfterCrash = await firstLiveService.getStatus();
+  if (statusAfterCrash.ordersSubmitted !== 1 || !statusAfterCrash.locked) {
+    throw new Error('FAILED CRASH TEST: System state after restart is not locked.');
+  }
+  if (statusAfterCrash.armed) {
+    throw new Error('FAILED CRASH TEST: System re-armed automatically after restart.');
+  }
+
+  const crashTokenHash = hashReservationToken(crashReservation.reservationToken);
+  const rowsAfterCrash = await executeQuery<any>("SELECT status FROM first_live_ledger WHERE id = ?", [crashTokenHash]);
+  if (rowsAfterCrash[0]?.status !== 'RESERVED') {
+    throw new Error('FAILED CRASH TEST: Reservation is not in RESERVED state.');
+  }
+
+  // 4. Try to duplicate the same reservation
+  const duplicateReservation = await firstLiveService.reserveFirstLiveOrder({
+    correlationId: 'crash-corr',
+    idempotencyKey: 'crash-idem',
+    orderRequest: validOrderRequest
+  });
+  if (duplicateReservation.success) {
+    throw new Error('FAILED CRASH TEST: Allowed duplicate reservation after crash/restart.');
+  }
+
+  console.log('  ✓ Crash/restart recovery verified successfully.');
 
   // ----------------------------------------------------------------
   // M. Production database remains untouched

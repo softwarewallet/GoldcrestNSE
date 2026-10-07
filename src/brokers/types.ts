@@ -170,6 +170,8 @@ export interface OrderRequest {
   firstLiveReservationToken?: string;
   /** Internal server-generated First-Live idempotency key binding */
   _firstLiveIdempotencyKey?: string;
+  /** Internal server-generated First-Live correlation ID binding */
+  _firstLiveCorrelationId?: string;
 }
 
 export interface OrderModification {

@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { generateFirstLiveFingerprint, maskReservationToken } from '../../../services/firstLiveService';
+import { generateFirstLiveFingerprint, maskReservationToken, hashReservationToken } from '../../../services/firstLiveService';
 import { executeQuery } from '../../../database/db';
 import { BaseBrokerAdapter } from '../BaseBrokerAdapter';
 import {
@@ -1151,9 +1151,10 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
     let isAuthorizedFirstLive = false;
 
     if (reservationToken) {
+      const tokenHash = hashReservationToken(reservationToken);
       const rows = await executeQuery<any>(
         'SELECT * FROM first_live_ledger WHERE id = ? OR reservation_token = ? LIMIT 1',
-        [reservationToken, reservationToken]
+        [tokenHash, tokenHash]
       );
 
       const reservation = rows[0];
@@ -1231,9 +1232,70 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
         );
       }
 
+      const reqCorrelationId = order._firstLiveCorrelationId || '';
+      if (reservation.correlation_id !== reqCorrelationId) {
+        throw new BrokerError(
+          'FIRST_LIVE_ORDER_NOT_AUTHORIZED',
+          `FIRST_LIVE_ORDER_NOT_AUTHORIZED: Reservation correlation ID mismatch (Expected: ${reservation.correlation_id}, Order: ${reqCorrelationId}).`,
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+
+      // Explicit stopLoss and takeProfit validation
+      let reservedSL: number | undefined = undefined;
+      let reservedTP: number | undefined = undefined;
+      try {
+        if (reservation.payload_json) {
+          const payload = JSON.parse(reservation.payload_json);
+          reservedSL = payload.orderRequest?.stopLoss;
+          reservedTP = payload.orderRequest?.takeProfit;
+        }
+      } catch (e) {
+        // payload_json is invalid, fail closed
+        throw new BrokerError(
+          'FIRST_LIVE_ORDER_NOT_AUTHORIZED',
+          'FIRST_LIVE_ORDER_NOT_AUTHORIZED: Malformed payload in reservation record.',
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+
+      if (reservedSL !== order.stopLoss) {
+        throw new BrokerError(
+          'FIRST_LIVE_ORDER_NOT_AUTHORIZED',
+          `FIRST_LIVE_ORDER_NOT_AUTHORIZED: Reservation stopLoss mismatch (Expected: ${reservedSL}, Order: ${order.stopLoss}).`,
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+
+      if (reservedTP !== order.takeProfit) {
+        throw new BrokerError(
+          'FIRST_LIVE_ORDER_NOT_AUTHORIZED',
+          `FIRST_LIVE_ORDER_NOT_AUTHORIZED: Reservation takeProfit mismatch (Expected: ${reservedTP}, Order: ${order.takeProfit}).`,
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+
       // Cryptographic Order Fingerprint Validation
-      const expectedFingerprint = generateFirstLiveFingerprint(order);
-      if (reservation.fingerprint && reservation.fingerprint !== expectedFingerprint) {
+      const expectedFingerprint = generateFirstLiveFingerprint(order, reqIdempotencyKey, reqCorrelationId);
+      const dbFingerprint = reservation.fingerprint;
+
+      if (!dbFingerprint || typeof dbFingerprint !== 'string' || dbFingerprint.length !== 64 || expectedFingerprint.length !== 64) {
+        throw new BrokerError(
+          'FIRST_LIVE_ORDER_NOT_AUTHORIZED',
+          'FIRST_LIVE_ORDER_NOT_AUTHORIZED: Fingerprint is missing or malformed.',
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+
+      const expectedBuf = Buffer.from(expectedFingerprint, 'hex');
+      const dbBuf = Buffer.from(dbFingerprint, 'hex');
+
+      if (expectedBuf.length !== dbBuf.length || !crypto.timingSafeEqual(expectedBuf, dbBuf)) {
         throw new BrokerError(
           'FIRST_LIVE_ORDER_NOT_AUTHORIZED',
           'FIRST_LIVE_ORDER_NOT_AUTHORIZED: Cryptographic order fingerprint mismatch. The order details have been tampered with or do not match the reservation context.',
