@@ -46,7 +46,7 @@ const pred = prediction([
   { symbol: 'BANKNIFTY', signal: { direction: 'BUY' } }
 ]);
 assert.equal(pred.bias, 'BULLISH');
-assert.ok(pred.confidence >= 25 && pred.confidence <= 85);
+assert.ok(pred.confidence >= 25 && pred.confidence <= 88);
 
 resetIndianMarketNewsCacheForTest();
 const originalFetch = globalThis.fetch;

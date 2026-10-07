@@ -508,6 +508,28 @@ function initSchema(db: Database) {
       status TEXT NOT NULL
     );
 
+    -- 29. First-Live Certification Ledger
+    CREATE TABLE IF NOT EXISTS first_live_ledger (
+      id TEXT PRIMARY KEY,
+      correlation_id TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      broker TEXT NOT NULL,
+      environment TEXT NOT NULL,
+      execution_mode TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      side TEXT NOT NULL,
+      quantity REAL NOT NULL,
+      requested_price REAL,
+      status TEXT NOT NULL,
+      broker_order_id TEXT,
+      filled_quantity REAL,
+      fill_price REAL,
+      attempted_at INTEGER NOT NULL,
+      reconciled_at INTEGER,
+      payload_json TEXT NOT NULL,
+      result_json TEXT
+    );
+
     -- 30. Autonomous Execution Idempotency
     CREATE TABLE IF NOT EXISTS execution_intents (
       idempotency_key TEXT PRIMARY KEY,

@@ -30,7 +30,7 @@ export function evaluateSystemConfigIntegrity(config: SystemConfig): ConfigInteg
   check('tradingMode', config.tradingMode === 'LIVE_ONLY');
   check('cTraderApiMode', config.cTraderApiMode === 'LIVE' || config.cTraderApiMode === 'DEMO');
   check('liveTradingEnabledType', typeof config.liveTradingEnabled === 'boolean');
-  check('executionMode', config.executionMode === 'LIVE_DRY_RUN' || config.executionMode === 'LIVE_EXECUTION');
+  check('executionMode', config.executionMode === 'LIVE_DRY_RUN' || config.executionMode === 'LIVE_EXECUTION' || config.executionMode === 'FIRST_LIVE_CERTIFICATION');
   check('defaultRiskPct', positiveFinite(config.defaultRiskPct) && config.defaultRiskPct <= 100);
   check('maxDailyLossPct', positiveFinite(config.maxDailyLossPct) && config.maxDailyLossPct <= 100);
   check('maxOpenPositions', positiveInteger(config.maxOpenPositions));
@@ -51,7 +51,7 @@ export function evaluateSystemConfigIntegrity(config: SystemConfig): ConfigInteg
   check('autoLiveMaxTradesPerPair', positiveInteger(config.autoLiveMaxTradesPerPair));
   check('forexStopLossPips', positiveFinite(config.forexStopLossPips));
   check('forexTakeProfitPips', positiveFinite(config.forexTakeProfitPips));
-  check('autoLiveForexPairs', Array.isArray(config.autoLiveForexPairs));
+  check('autoLiveForexPairs', Array.isArray(config.autoLiveForexPairs) && config.autoLiveForexPairs.length > 0 && config.autoLiveForexPairs.every(pair => typeof pair === 'string' && /^[A-Z0-9]{3}\/[A-Z0-9]{3}$/.test(pair)));
   check('autoLiveIndianUnderlyings', Array.isArray(config.autoLiveIndianUnderlyings) && config.autoLiveIndianUnderlyings.length > 0 && config.autoLiveIndianUnderlyings.every(symbol => typeof symbol === 'string' && /^[A-Z0-9._-]+$/.test(symbol)));
   check('financialDisclaimer', typeof config.financialDisclaimer === 'string' && config.financialDisclaimer.trim().length > 0);
 

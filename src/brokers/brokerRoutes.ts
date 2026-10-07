@@ -16,6 +16,8 @@ import { calculateForexPipTargets, normalizePriceToThreeDigits, normalizePriceTo
 import { liveRuntimeLog } from '../services/liveRuntimeLog';
 import { autoTradingService } from '../services/autoTradingService';
 
+import { FivePaisaBrokerAdapter } from './adapters/fivepaisa/FivePaisaBrokerAdapter';
+
 export const brokerRouter = Router();
 
 const LIVE_BROKERS: BrokerType[] = ['FIVE_PAISA'];
@@ -1292,9 +1294,16 @@ brokerRouter.post('/fivepaisa/totp-login', async (req: Request, res: Response) =
     res.json({ success: true, message: 'Successfully authenticated with 5paisa OpenAPI via TOTP.', account });
   } catch (err: any) {
     const isRateLimited = String(err?.message || '').includes('RATE_LIMITED');
+    const rateLimitState = FivePaisaBrokerAdapter.getRateLimitState();
     res.status(isRateLimited ? 429 : 400).json({
-      error: err.message || '5paisa TOTP authentication failed',
-      code: isRateLimited ? 'RATE_LIMITED' : 'ERROR'
+      error: isRateLimited
+        ? '5paisa authentication is temporarily rate-limited. Wait before attempting authentication again.'
+        : (err.message || '5paisa TOTP authentication failed'),
+      code: isRateLimited ? 'RATE_LIMITED' : 'AUTHENTICATION_FAILED',
+      timestamp: Date.now(),
+      retryAfterSeconds: rateLimitState?.remainingSeconds || 60,
+      provider: '5paisa',
+      endpoint: '/VendorsAPI/Service1.svc/TOTPLogin'
     });
   }
 });

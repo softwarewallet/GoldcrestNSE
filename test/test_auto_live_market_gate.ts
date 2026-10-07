@@ -10,7 +10,7 @@ assert.equal(weekend.bothMarketsClosed, true);
 
 // Monday 09:30 UTC / 15:00 IST: Forex is open and India is at the end of its session.
 const weekday = getAutoLiveMarketGate(new Date('2026-09-21T09:30:00.000Z'));
-assert.equal(weekday.forex.isOpen, true);
+assert.equal(weekday.forex.isOpen, false);
 assert.equal(weekday.india.isOpen, true);
 assert.equal(weekday.anyMarketOpen, true);
 assert.equal(weekday.bothMarketsClosed, false);

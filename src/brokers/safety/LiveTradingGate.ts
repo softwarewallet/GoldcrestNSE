@@ -63,8 +63,14 @@ export class LiveTradingGate {
     }
 
     // Check 5: Instrument validated
-    const instrument = await adapter.getInstrument(params.order.symbol);
-    const instrumentValidated = instrument !== null;
+    let instrumentValidated = false;
+    let instrument: any = null;
+    try {
+      instrument = await adapter.getInstrument(params.order.symbol);
+      instrumentValidated = instrument !== null;
+    } catch {
+      instrumentValidated = false;
+    }
     if (!instrumentValidated) {
       failedReasons.push(`Condition 5 Failed: Instrument ${params.order.symbol} is not valid on this broker.`);
     }

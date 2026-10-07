@@ -74,6 +74,53 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
   protected config: FivePaisaConfig;
   protected openPositions: Map<string, NormalizedPosition> = new Map();
   protected openOrders: Map<string, NormalizedOrder> = new Map();
+
+  private static rateLimitedUntil: number = 0;
+  private static rateLimitState: {
+    code: 'RATE_LIMITED';
+    timestamp: number;
+    retryAfterMs: number;
+    provider: string;
+    endpoint: string;
+    correlationId: string;
+    message: string;
+  } | null = null;
+  private static inFlightTotpPromise: Promise<string> | null = null;
+
+  public static isRateLimited(): boolean {
+    return Date.now() < FivePaisaBrokerAdapter.rateLimitedUntil;
+  }
+
+  public static getRateLimitState() {
+    if (Date.now() < FivePaisaBrokerAdapter.rateLimitedUntil && FivePaisaBrokerAdapter.rateLimitState) {
+      const remainingMs = FivePaisaBrokerAdapter.rateLimitedUntil - Date.now();
+      return {
+        ...FivePaisaBrokerAdapter.rateLimitState,
+        remainingMs,
+        remainingSeconds: Math.ceil(remainingMs / 1000)
+      };
+    }
+    return null;
+  }
+
+  public static setRateLimitedCooldown(cooldownMs: number = 60_000, message?: string): void {
+    FivePaisaBrokerAdapter.rateLimitedUntil = Date.now() + cooldownMs;
+    FivePaisaBrokerAdapter.rateLimitState = {
+      code: 'RATE_LIMITED',
+      timestamp: Date.now(),
+      retryAfterMs: cooldownMs,
+      provider: '5paisa',
+      endpoint: '/VendorsAPI/Service1.svc/TOTPLogin',
+      correlationId: `rl-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      message: message || '5paisa OpenAPI rate limited login attempts (HTTP 429).'
+    };
+  }
+
+  public static resetRateLimitForTesting(): void {
+    FivePaisaBrokerAdapter.rateLimitedUntil = 0;
+    FivePaisaBrokerAdapter.rateLimitState = null;
+    FivePaisaBrokerAdapter.inFlightTotpPromise = null;
+  }
   private scripMasterCache: { expiresAt: number; rows: any[] } | null = null;
   private static readonly SCRIP_MASTER_TTL_MS = 10 * 60 * 1000;
   private scripMasterFetchInFlight: Promise<any[]> | null = null;
@@ -163,65 +210,94 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
    * Follows official 5paisa OAuth flow: TOTPLogin -> GetAccessToken
    */
   async loginWithTotp(totpCode?: string, pinCode?: string): Promise<string> {
-    this.validateCredentials();
+    const now = Date.now();
+    if (FivePaisaBrokerAdapter.isRateLimited()) {
+      const state = FivePaisaBrokerAdapter.getRateLimitState();
+      const remainingSec = state?.remainingSeconds || 60;
+      this.status = 'RATE_LIMITED';
+      throw new Error(`RATE_LIMITED: 5paisa authentication is temporarily rate-limited. Cooldown active for another ${remainingSec}s. Please wait before attempting authentication again.`);
+    }
 
-    let totp = totpCode;
-    if (!totp && this.config.totpSecret) {
+    if (FivePaisaBrokerAdapter.inFlightTotpPromise) {
+      return FivePaisaBrokerAdapter.inFlightTotpPromise;
+    }
+
+    const authPromise = (async () => {
       try {
-        totp = generateTOTP(this.config.totpSecret);
-      } catch (e: any) {
-        throw new Error(`Failed to generate TOTP from secret: ${e.message}`);
+        this.validateCredentials();
+
+        let totp = totpCode;
+        if (!totp && this.config.totpSecret) {
+          try {
+            totp = generateTOTP(this.config.totpSecret);
+          } catch (e: any) {
+            throw new Error(`Failed to generate TOTP from secret: ${e.message}`);
+          }
+        }
+
+        const pin = pinCode || this.config.pin || this.config.password;
+
+        if (!totp) {
+          throw new Error('TOTP 6-digit code or TOTP Secret is required for 5paisa authentication');
+        }
+        if (!pin) {
+          throw new Error('2FA PIN is required for 5paisa authentication');
+        }
+
+        const url = `${this.getApiHost()}/VendorsAPI/Service1.svc/TOTPLogin`;
+        const payload = {
+          head: {
+            Key: this.config.userKey
+          },
+          body: {
+            Email_ID: this.config.clientCode || this.config.userId,
+            TOTP: totp,
+            PIN: pin
+          }
+        };
+
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            '5Paisa-API-Uid': 'ka7SFqAU6SC'
+          },
+          body: JSON.stringify(payload)
+        });
+
+        if (res.status === 429) {
+          FivePaisaBrokerAdapter.setRateLimitedCooldown(60_000, '5paisa OpenAPI rate limited login attempts (HTTP 429).');
+          this.status = 'RATE_LIMITED';
+          throw new Error('RATE_LIMITED: 5paisa OpenAPI is rate-limiting login attempts (HTTP 429). Please wait 30–60 seconds before submitting a new TOTP code.');
+        }
+
+        if (!res.ok) {
+          throw new Error(`5paisa TOTPLogin HTTP ${res.status}: ${res.statusText}`);
+        }
+
+        const data = await res.json().catch(() => ({}));
+        const message = data?.body?.Message || data?.Message || '';
+        if (data?.body?.Status === false && (String(message).toUpperCase().includes('RATE') || String(message).toUpperCase().includes('LIMIT') || String(message).toUpperCase().includes('TOO MANY'))) {
+          FivePaisaBrokerAdapter.setRateLimitedCooldown(60_000, `5paisa API rate limited: ${message}`);
+          this.status = 'RATE_LIMITED';
+          throw new Error(`RATE_LIMITED: 5paisa API rate limited: ${message}`);
+        }
+
+        if (data?.body?.RequestToken) {
+          const token = await this.exchangeRequestToken(data.body.RequestToken);
+          FivePaisaBrokerAdapter.rateLimitedUntil = 0;
+          FivePaisaBrokerAdapter.rateLimitState = null;
+          this.status = 'CONNECTED';
+          return token;
+        }
+        throw new Error(message || 'Failed to obtain RequestToken from 5paisa TOTPLogin');
+      } finally {
+        FivePaisaBrokerAdapter.inFlightTotpPromise = null;
       }
-    }
+    })();
 
-    const pin = pinCode || this.config.pin || this.config.password;
-
-    if (!totp) {
-      throw new Error('TOTP 6-digit code or TOTP Secret is required for 5paisa authentication');
-    }
-    if (!pin) {
-      throw new Error('2FA PIN is required for 5paisa authentication');
-    }
-
-    const url = `${this.getApiHost()}/VendorsAPI/Service1.svc/TOTPLogin`;
-    const payload = {
-      head: {
-        Key: this.config.userKey
-      },
-      body: {
-        Email_ID: this.config.clientCode || this.config.userId,
-        TOTP: totp,
-        PIN: pin
-      }
-    };
-
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        '5Paisa-API-Uid': 'ka7SFqAU6SC'
-      },
-      body: JSON.stringify(payload)
-    });
-
-    if (res.status === 429) {
-      throw new Error('RATE_LIMITED: 5paisa OpenAPI is rate-limiting login attempts (HTTP 429). Please wait 30–60 seconds before submitting a new TOTP code.');
-    }
-
-    if (!res.ok) {
-      throw new Error(`5paisa TOTPLogin HTTP ${res.status}: ${res.statusText}`);
-    }
-
-    const data = await res.json().catch(() => ({}));
-    const message = data?.body?.Message || data?.Message || '';
-    if (data?.body?.Status === false && (String(message).toUpperCase().includes('RATE') || String(message).toUpperCase().includes('LIMIT') || String(message).toUpperCase().includes('TOO MANY'))) {
-      throw new Error(`RATE_LIMITED: 5paisa API rate limited: ${message}`);
-    }
-
-    if (data?.body?.RequestToken) {
-      return await this.exchangeRequestToken(data.body.RequestToken);
-    }
-    throw new Error(message || 'Failed to obtain RequestToken from 5paisa TOTPLogin');
+    FivePaisaBrokerAdapter.inFlightTotpPromise = authPromise;
+    return authPromise;
   }
 
   /**
@@ -275,8 +351,8 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
     freeMargin: number;
     raw: any;
   }> {
-    // If no access token, try auto-login if totpSecret and pin are present
-    if (!this.config.accessToken && this.config.totpSecret) {
+    // If no access token, try auto-login if totpSecret and pin are present and not rate-limited
+    if (!this.config.accessToken && this.config.totpSecret && !FivePaisaBrokerAdapter.isRateLimited()) {
       try {
         await this.loginWithTotp();
       } catch (authErr: any) {
@@ -319,7 +395,7 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
     if (!res.ok) {
       if (res.status === 401) {
         this.config.accessToken = undefined;
-        if (this.config.totpSecret) {
+        if (this.config.totpSecret && !FivePaisaBrokerAdapter.isRateLimited()) {
           await this.loginWithTotp();
           return this.fetchMarginFromApi();
         }
@@ -333,7 +409,7 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
       const desc = data.head.StatusDescription.toLowerCase();
       if (desc.includes('token') || desc.includes('session') || desc.includes('unauthorized')) {
         this.config.accessToken = undefined;
-        if (this.config.totpSecret) {
+        if (this.config.totpSecret && !FivePaisaBrokerAdapter.isRateLimited()) {
           await this.loginWithTotp();
           return this.fetchMarginFromApi();
         }
@@ -1412,6 +1488,9 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
   }
 
   async getTradingStatus(): Promise<BrokerStatus> {
+    if (FivePaisaBrokerAdapter.isRateLimited()) {
+      return 'RATE_LIMITED';
+    }
     return this.status;
   }
 
@@ -1454,6 +1533,10 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
   public async ensureActiveSession(): Promise<boolean> {
     if (this.config.accessToken && this.config.accessToken.trim() !== '') {
       return true;
+    }
+
+    if (FivePaisaBrokerAdapter.isRateLimited()) {
+      return false;
     }
 
     if (this.config.totpSecret) {

@@ -431,6 +431,34 @@ async function fetchInternal(options: IndianNewsFetchOptions, now: Date): Promis
   const session = getIndianSessionState(now);
   const nowMs = now.getTime();
 
+  if (!session.isOpen && session.currentPhase === 'CLOSED') {
+    return {
+      market: 'INDIAN_EQUITY',
+      marketOpen: false,
+      marketPhase: 'CLOSED',
+      fetchedAt: now.toISOString(),
+      status: 'MARKET_CLOSED',
+      articleCount: 0,
+      articles: [],
+      providerStatus: {
+        PULSE_ZERODHA: 'NO_RESULTS',
+        CNBC_TV18: 'NO_RESULTS',
+        ET_MARKETS: 'NO_RESULTS',
+        MINT: 'NO_RESULTS',
+        GOOGLE_NEWS_INDIA: 'NO_RESULTS',
+        FMP: 'UNCONFIGURED'
+      },
+      providerDiagnostics: {
+        PULSE_ZERODHA: { status: 'NO_RESULTS', rawArticleCount: 0, freshArticleCount: 0, staleArticleCount: 0, configured: true },
+        CNBC_TV18: { status: 'NO_RESULTS', rawArticleCount: 0, freshArticleCount: 0, staleArticleCount: 0, configured: true },
+        ET_MARKETS: { status: 'NO_RESULTS', rawArticleCount: 0, freshArticleCount: 0, staleArticleCount: 0, configured: true },
+        MINT: { status: 'NO_RESULTS', rawArticleCount: 0, freshArticleCount: 0, staleArticleCount: 0, configured: true },
+        GOOGLE_NEWS_INDIA: { status: 'NO_RESULTS', rawArticleCount: 0, freshArticleCount: 0, staleArticleCount: 0, configured: true },
+        FMP: { status: 'UNCONFIGURED', rawArticleCount: 0, freshArticleCount: 0, staleArticleCount: 0, configured: false }
+      }
+    };
+  }
+
   const [pulse, cnbc, et, mint, gnews, fmp] = await Promise.all([
     fetchProvider('PULSE_ZERODHA'),
     fetchProvider('CNBC_TV18'),

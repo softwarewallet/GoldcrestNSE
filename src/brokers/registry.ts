@@ -128,8 +128,17 @@ export class BrokerRegistry {
         reason: `5paisa broker only supports Indian markets (INDIAN_EQUITY, INDIAN_OPTIONS, INDIAN_FUTURES). Cannot route ${market} to 5paisa.`
       };
     }
+    if (broker === 'CTRADER') {
+      if (market === 'FOREX') {
+        return { compatible: true };
+      }
+      return {
+        compatible: false,
+        reason: `cTrader broker only supports FOREX market. Cannot route ${market} to cTrader.`
+      };
+    }
 
-    return { compatible: false, reason: `Unknown or unsupported broker ${broker}. Goldcrest operates for Indian markets.` };
+    return { compatible: false, reason: `Unknown or unsupported broker ${broker}.` };
   }
 
   async testBrokerConnection(broker: BrokerType = 'FIVE_PAISA', environment: TradingEnvironment = 'LIVE'): Promise<ConnectionTestResult> {

@@ -381,11 +381,11 @@ const scenarios: Scenario[] = [
       environment: 'production'
     });
   }},
-  { id: 50, name: 'cTrader LIVE_ONLY registry remains authoritative after runtime recovery tests', run: () => {
+  { id: 50, name: '5paisa LIVE_ONLY registry remains authoritative after runtime recovery tests', run: () => {
     assert.equal(brokerRegistry.getEnvironment(), 'LIVE');
     assert.deepEqual(
       brokerRegistry.getActiveLiveAdapters().map(adapter => `${adapter.broker}:${adapter.environment}`).sort(),
-      ['CTRADER:LIVE', 'FIVE_PAISA:LIVE']
+      ['FIVE_PAISA:LIVE']
     );
     assert.equal(getSystemConfig().tradingMode, 'LIVE_ONLY');
   }}

@@ -5,7 +5,12 @@ import { evaluateSystemConfigIntegrity } from './configIntegrityService';
 export interface SystemConfig {
   tradingMode: 'LIVE_ONLY';
   liveTradingEnabled: boolean;
-  executionMode: 'LIVE_DRY_RUN' | 'LIVE_EXECUTION';
+  executionMode: 'LIVE_DRY_RUN' | 'LIVE_EXECUTION' | 'FIRST_LIVE_CERTIFICATION';
+  firstLiveArmed?: boolean;
+  firstLiveOrdersAllowed?: number;
+  firstLiveOrdersSubmitted?: number;
+  firstLiveLocked?: boolean;
+  firstLiveArmedAt?: number | null;
   dataStatus: 'LIVE' | 'DELAYED' | 'STALE' | 'UNAVAILABLE';
   modelStatus: string;
   researchStatus: 'CLOSED';
@@ -79,13 +84,23 @@ const PERSISTED_KEYS: readonly (keyof SystemConfig)[] = [
   'autoLiveForexPairs',
   'autoLiveIndianUnderlyings',
   'financialDisclaimer',
-  'executionMode'
+  'executionMode',
+  'firstLiveArmed',
+  'firstLiveOrdersAllowed',
+  'firstLiveOrdersSubmitted',
+  'firstLiveLocked',
+  'firstLiveArmedAt'
 ];
 
 let activeConfig: SystemConfig = {
   tradingMode: 'LIVE_ONLY',
   liveTradingEnabled: process.env.LIVE_TRADING_ENABLED === 'true',
   executionMode: 'LIVE_DRY_RUN',
+  firstLiveArmed: false,
+  firstLiveOrdersAllowed: 1,
+  firstLiveOrdersSubmitted: 0,
+  firstLiveLocked: false,
+  firstLiveArmedAt: null,
   dataStatus: 'UNAVAILABLE',
   modelStatus: 'ML BASELINE / UNCALIBRATED (PHASE 1)',
   researchStatus: 'CLOSED',
@@ -116,7 +131,7 @@ let activeConfig: SystemConfig = {
   autoLiveMaxTradesPerPair: 4,
   forexStopLossPips: 20,
   forexTakeProfitPips: 40,
-  autoLiveForexPairs: [],
+  autoLiveForexPairs: ['EUR/USD', 'GBP/USD'],
   autoLiveIndianUnderlyings: ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX'],
   financialDisclaimer:
     'Trading in Indian equity and derivatives involves substantial risk of loss. Model outputs, signals, probabilities and technical analysis are estimates for informational and analytical purposes only and are not financial advice, guarantees, or assurances of future performance.'

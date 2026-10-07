@@ -151,13 +151,7 @@ export function issueOperatorSession(configuredKey: string): string {
 function isLocalDevelopmentRequest(req: Request): boolean {
   if (process.env.NODE_ENV === 'production') return false;
   const address = String(req.socket.remoteAddress || req.ip || '').toLowerCase();
-  if (address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1') {
-    return true;
-  }
-  if (!operatorKeyConfigured()) {
-    return true;
-  }
-  return false;
+  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
 }
 
 export function operatorAuthRequired(req: Request, res: Response, next: NextFunction): void {

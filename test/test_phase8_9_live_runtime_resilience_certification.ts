@@ -419,8 +419,8 @@ const scenarios: Scenario[] = [
     };
     try {
       const captured = await captureAccountBalanceSnapshots(Date.now());
-      assert.equal(captured.length, 2);
-      assert.deepEqual(new Set(seen), new Set(['CTRADER:LIVE', 'FIVE_PAISA:LIVE']));
+      assert.equal(captured.length, 1);
+      assert.deepEqual(new Set(seen), new Set(['FIVE_PAISA:LIVE']));
       assert.ok(captured.every(row => row.status === 'CAPTURED'));
     } finally {
       (brokerRegistry as any).getAdapter = original;
@@ -442,10 +442,10 @@ const scenarios: Scenario[] = [
     assert.equal(updateSystemConfig({ cTraderApiMode: 'DEMO' }).cTraderApiMode, 'DEMO');
     assert.equal(getSystemConfig().tradingMode, 'LIVE_ONLY');
   }},
-  { id: 40, name: 'LIVE broker registry exposes both authoritative live adapters', run: () => {
+  { id: 40, name: 'LIVE broker registry exposes active live adapters', run: () => {
     assert.equal(brokerRegistry.getEnvironment(), 'LIVE');
     const adapters = brokerRegistry.getActiveLiveAdapters();
-    assert.deepEqual(adapters.map(adapter => `${adapter.broker}:${adapter.environment}`).sort(), ['CTRADER:LIVE', 'FIVE_PAISA:LIVE']);
+    assert.deepEqual(adapters.map(adapter => `${adapter.broker}:${adapter.environment}`).sort(), ['FIVE_PAISA:LIVE']);
     assert.throws(() => brokerRegistry.setEnvironment('DEMO' as any), /LIVE_ONLY/i);
   }}
 ];
