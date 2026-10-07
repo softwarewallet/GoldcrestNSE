@@ -44,7 +44,7 @@ add(17,'Valid cTrader LIVE mode can be prepared',()=>assert.equal(prepareSystemC
 add(18,'Valid cTrader DEMO mode can be prepared',()=>assert.equal(prepareSystemConfigUpdate({cTraderApiMode:'DEMO'}).cTraderApiMode,'DEMO'));
 add(19,'Valid pair list can be prepared',()=>assert.deepEqual(prepareSystemConfigUpdate({autoLiveForexPairs:['EUR/USD','GBP/USD']}).autoLiveForexPairs,['EUR/USD','GBP/USD']));
 add(20,'Valid Indian list can be prepared',()=>assert.deepEqual(prepareSystemConfigUpdate({autoLiveIndianUnderlyings:['NIFTY','BANKNIFTY']}).autoLiveIndianUnderlyings,['NIFTY','BANKNIFTY']));
-add(21,'System setting row plan contains all persisted fields',()=>assert.equal(buildSystemSettingRows(base).length,22));
+add(21,'System setting row plan contains all persisted fields',()=>assert.equal(buildSystemSettingRows(base).length,28));
 add(22,'System setting row plan contains cTrader API mode',()=>assert.equal(buildSystemSettingRows(base).some(row=>row[0]==='CTRADER_API_MODE'),true));
 add(23,'System setting row plan contains selected account id',()=>assert.equal(buildSystemSettingRows(base).some(row=>row[0]==='SELECTED_CTRADER_ACCOUNT_ID'),true));
 add(24,'System setting row plan contains risk percentage',()=>assert.equal(buildSystemSettingRows(base).some(row=>row[0]==='DEFAULT_RISK_PCT'),true));

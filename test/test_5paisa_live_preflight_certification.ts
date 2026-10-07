@@ -1,13 +1,13 @@
 import { FivePaisaLiveAdapter } from '../src/brokers/adapters/fivepaisa/FivePaisaLiveAdapter';
 import { OrderRequest } from '../src/brokers/types';
 import { updateSystemConfig } from '../src/services/configService';
-import { executeRun } from '../src/database/db';
+import { firstLiveService } from '../src/services/firstLiveService';
 import { killSwitch } from '../src/brokers/safety/KillSwitch';
 import fs from 'fs';
 import path from 'path';
 
 async function run5PaisaPreflightCertification() {
-  console.log('=== STARTING 5PAISA LIVE ZERO-ORDER PREFLIGHT CERTIFICATION ===');
+  console.log('=== STARTING 5PAISA LIVE ZERO-TRANSMISSION CERTIFICATION ===');
 
   const adapter = new FivePaisaLiveAdapter({
     appName: 'GOLDCREST',
@@ -19,9 +19,8 @@ async function run5PaisaPreflightCertification() {
   });
   
   (adapter as any).status = 'CONNECTED';
-  // Note: FivePaisaLiveAdapter already sets isLive = true and environment = 'LIVE'
   
-  // Mock necessary methods
+  // Mock necessary methods to isolate from real network during preflight checks
   adapter.getInstrument = async (symbol: string) => ({
     brokerInstrumentId: '12345',
     symbol: symbol,
@@ -29,9 +28,6 @@ async function run5PaisaPreflightCertification() {
   } as any);
 
   adapter.ensureActiveSession = async () => true;
-
-  // Set execution mode to LIVE_EXECUTION to bypass LIVE_DRY_RUN check
-  updateSystemConfig({ executionMode: 'LIVE_EXECUTION' });
 
   const validOrderRequest: OrderRequest = {
     market: 'INDIAN_OPTIONS',
@@ -42,69 +38,169 @@ async function run5PaisaPreflightCertification() {
     price: 50
   };
 
-  // Test 1: Successful preflight
-  console.log('\n[1] Testing Successful Preflight...');
-  let transmissionCount = 0;
-  
-  // Set up interception boundary
-  (global as any).__GOLDCREST_INTERCEPT_5PAISA_ORDER = (payload: any) => {
-    transmissionCount++;
-    console.log('Intercepted order transmission attempt. payload=', JSON.stringify(payload));
-  };
-  
-  // Note: placeOrder calls preflightOrder. If preflightOrder throws, it stops.
-  // If preflightOrder passes, placeOrder reaches the interception hook, 
-  // which logs and returns a mock object, preventing fetch.
-  // The test should NOT expect an error if interception is handled.
-  
-  try {
-    await adapter.placeOrder(validOrderRequest);
-  } catch (err: any) {
-    console.log('Error caught during placeOrder (expected due to mock interception):', err.message);
-  }
+  let orderBoundaryAttemptCount = 0;
+  let actualOrderHttpAttemptCount = 0;
+  const outboundUrls: string[] = [];
 
-  // transmissionCount should be 1 because interception boundary was reached
-  if (transmissionCount !== 1) {
-    throw new Error('FAILED: Broker order transmission was NOT intercepted!');
-  }
-  
-  console.log('  ✓ Successful preflight passed, interception verified.');
-  delete (global as any).__GOLDCREST_INTERCEPT_5PAISA_ORDER;
+  // 1. Intercept actual HTTP transport at the lowest level
+  const originalFetch = global.fetch;
+  (global as any).fetch = async (input: any, _init?: any) => {
+    const url = String(input);
+    outboundUrls.push(url);
 
-  // Test 2: Emergency Stop
-  console.log('\n[2] Testing Emergency Stop...');
-  await killSwitch.triggerEmergencyHalt('Test stop');
-  try {
-    await adapter.preflightOrder(validOrderRequest);
-    throw new Error('FAILED: Preflight did not reject emergency stop.');
-  } catch (err: any) {
-    if (!err.message.includes('EMERGENCY_STOP_ACTIVE')) {
-        throw err;
+    if (url.includes('/PlaceOrderRequest') || url.includes('/ModifyOrderRequest') || url.includes('/CancelOrderRequest')) {
+      actualOrderHttpAttemptCount++;
+      throw new Error(`TEST SAFETY FAILURE: Real 5paisa order API attempted: ${url}`);
     }
-    console.log('  ✓ Emergency Stop preflight rejection verified.');
-  }
-  killSwitch.resumeTrading();
 
-  // Test 3: Connectivity Failure (Session)
-  console.log('\n[3] Testing Connectivity Failure...');
-  adapter.ensureActiveSession = async () => {
-    throw new Error('AUTHENTICATION_FAILED');
+    return { 
+      ok: true, 
+      json: async () => ({ head: { status: '0' }, body: { Status: 0, Message: 'Mock OK' } }) 
+    };
   };
-  try {
-    await adapter.preflightOrder(validOrderRequest);
-    throw new Error('FAILED: Preflight did not reject auth failure.');
-  } catch (err: any) {
-    if (err.message !== 'AUTHENTICATION_FAILED') {
-        throw err;
-    }
-    console.log('  ✓ Authentication failure preflight rejection verified.');
-  }
-  adapter.ensureActiveSession = async () => true;
 
-  console.log('\n=== 5PAISA LIVE PREFLIGHT CERTIFICATION PASSED SUCCESSFULLY ===');
+  // 2. Set up the internal certification boundary hook
+  (global as any).__GOLDCREST_CERT_BOUNDARY_HOOK = (_payload: any) => {
+    orderBoundaryAttemptCount++;
+    // Terminology check: only "boundary reached"
+    return { id: 'mocked-order-id', status: 'ACCEPTED' };
+  };
+
+  try {
+    const initialStatus = await firstLiveService.getStatus();
+
+    // Test 1: Successful production path exercise
+    console.log('\n[1] Testing Production placeOrder() Path...');
+    updateSystemConfig({ executionMode: 'LIVE_EXECUTION' });
+    orderBoundaryAttemptCount = 0;
+    actualOrderHttpAttemptCount = 0;
+
+    const result = await adapter.placeOrder(validOrderRequest);
+    
+    if (orderBoundaryAttemptCount !== 1) {
+      throw new Error(`FAILED: Expected 1 boundary attempt, got ${orderBoundaryAttemptCount}`);
+    }
+    if (actualOrderHttpAttemptCount !== 0) {
+      throw new Error(`FAILED: Real HTTP transmission attempted! Count: ${actualOrderHttpAttemptCount}`);
+    }
+    if (result.status !== 'ACCEPTED') {
+      throw new Error(`FAILED: Order not accepted in mock path. Status: ${result.status}`);
+    }
+    console.log('  ✓ Production placeOrder() path exercised successfully.');
+    console.log('  ✓ Internal order boundary reached = YES');
+    console.log('  ✓ Actual 5paisa HTTP transmission = 0');
+
+    // Test 2: Emergency Stop
+    console.log('\n[2] Testing Emergency Stop Blocking...');
+    await killSwitch.triggerEmergencyHalt('Test stop');
+    orderBoundaryAttemptCount = 0;
+    actualOrderHttpAttemptCount = 0;
+    try {
+      await adapter.placeOrder(validOrderRequest);
+      throw new Error('FAILED: placeOrder did not reject emergency stop.');
+    } catch (err: any) {
+      if (!err.message.includes('EMERGENCY_STOP_ACTIVE')) {
+        throw err;
+      }
+      if (orderBoundaryAttemptCount !== 0) {
+        throw new Error('FAILED: Order reached boundary during Emergency Stop!');
+      }
+      console.log('  ✓ Emergency Stop blocked order before boundary.');
+    }
+    killSwitch.resumeTrading();
+
+    // Test 3: Authentication Failure
+    console.log('\n[3] Testing Authentication Failure Blocking...');
+    const originalEnsure = adapter.ensureActiveSession;
+    adapter.ensureActiveSession = async () => { throw new Error('AUTHENTICATION_FAILED'); };
+    orderBoundaryAttemptCount = 0;
+    try {
+      await adapter.placeOrder(validOrderRequest);
+      throw new Error('FAILED: placeOrder did not reject auth failure.');
+    } catch (err: any) {
+      if (!err.message.includes('AUTHENTICATION_FAILED')) {
+        throw err;
+      }
+      if (orderBoundaryAttemptCount !== 0) {
+        throw new Error('FAILED: Order reached boundary during auth failure!');
+      }
+      console.log('  ✓ Authentication failure blocked order before boundary.');
+    }
+    adapter.ensureActiveSession = originalEnsure;
+
+    // Test 4: Instrument Rejection
+    console.log('\n[4] Testing Pre-boundary Rejection (Invalid Instrument)...');
+    const originalGetInstrument = adapter.getInstrument;
+    adapter.getInstrument = async () => null; // Simulate instrument not found
+    orderBoundaryAttemptCount = 0;
+    try {
+      await adapter.placeOrder(validOrderRequest);
+      throw new Error('FAILED: placeOrder did not reject invalid instrument.');
+    } catch (err: any) {
+      // The error message comes from FivePaisaBrokerAdapter.ts
+      if (!err.message.includes('authoritative scrip code is unavailable')) {
+        throw err;
+      }
+      if (orderBoundaryAttemptCount !== 0) {
+        throw new Error('FAILED: Order reached boundary with invalid instrument!');
+      }
+      console.log('  ✓ Invalid instrument blocked order before boundary.');
+    }
+    adapter.getInstrument = originalGetInstrument;
+
+    // Test 5: Hard Network Safety Test
+    console.log('\n[5] Testing Hard Network Safety (Fetch Guard)...');
+    // Disable the internal hook to let it fall through to fetch
+    const hook = (global as any).__GOLDCREST_CERT_BOUNDARY_HOOK;
+    delete (global as any).__GOLDCREST_CERT_BOUNDARY_HOOK;
+    
+    actualOrderHttpAttemptCount = 0;
+    try {
+      await adapter.placeOrder(validOrderRequest);
+      throw new Error('FAILED: placeOrder reached real fetch without being caught by fetch guard!');
+    } catch (err: any) {
+      if (err.message.includes('TEST SAFETY FAILURE: Real 5paisa order API attempted')) {
+        console.log('  ✓ Fetch guard correctly caught the attempt when hook was disabled.');
+      } else {
+        throw err;
+      }
+    }
+    if (actualOrderHttpAttemptCount !== 1) {
+       throw new Error(`FAILED: Fetch guard should have incremented attempt count. Got ${actualOrderHttpAttemptCount}`);
+    }
+    (global as any).__GOLDCREST_CERT_BOUNDARY_HOOK = hook;
+
+    // Test 6: Verify First-Live State remains untouched
+    console.log('\n[6] Verifying First-Live State Stability...');
+    const finalStatus = await firstLiveService.getStatus();
+    
+    if (initialStatus.ordersSubmitted !== finalStatus.ordersSubmitted) {
+      throw new Error(`FAILED: First-Live orders submitted changed from ${initialStatus.ordersSubmitted} to ${finalStatus.ordersSubmitted}`);
+    }
+    if (initialStatus.locked !== finalStatus.locked) {
+      throw new Error('FAILED: First-Live lock state changed!');
+    }
+    console.log('  ✓ First-Live state remained completely untouched.');
+
+    console.log('\n=== 5PAISA LIVE ZERO-TRANSMISSION CERTIFICATION PASSED ===');
+    console.log(`
+Production placeOrder() exercised = YES
+Production preflight executed = YES
+Internal order boundary reached = YES
+Actual 5paisa PlaceOrderRequest HTTP transmission = 0
+Actual modify-order HTTP transmission = 0
+Actual cancel-order HTTP transmission = 0
+First-Live reservation created = 0
+First-Live reservation consumed = 0
+    `);
+
+  } finally {
+    global.fetch = originalFetch;
+    delete (global as any).__GOLDCREST_CERT_BOUNDARY_HOOK;
+  }
 }
 
 run5PaisaPreflightCertification().catch(err => {
-  console.error('❌ PREFLIGHT CERTIFICATION TESTS FAILED:', err);
+  console.error('❌ CERTIFICATION FAILED:', err);
   process.exit(1);
 });

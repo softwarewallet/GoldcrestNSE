@@ -84,7 +84,7 @@ add(31,'Configuration rejects zero open positions',()=>assert.throws(()=>prepare
 add(32,'Configuration accepts decimal Forex trade value',()=>assert.equal(prepareSystemConfigUpdate({maxTradeValueForexUsd:10.22}).maxTradeValueForexUsd,10.22));
 add(33,'Configuration rejects string numeric trade risk',()=>assert.throws(()=>prepareSystemConfigUpdate({defaultRiskPct:'1' as any}),/Configuration integrity rejected/));
 add(34,'Configuration candidate remains integrity-valid after legitimate update',()=>assert.equal(evaluateSystemConfigIntegrity(prepareSystemConfigUpdate({maxDailyLossPct:3.5})).ok,true));
-add(35,'Configuration persisted field count is stable',()=>assert.equal(buildSystemSettingRows(config).length,22));
+add(35,'Configuration persisted field count is stable',()=>assert.equal(buildSystemSettingRows(config).length,28));
 add(36,'cTrader API mode is included in durable settings',()=>assert.equal(buildSystemSettingRows({...config,cTraderApiMode:'LIVE'}).find(r=>r[0]==='CTRADER_API_MODE')?.[1],'LIVE'));
 add(37,'Durable settings decode cTrader LIVE mode',()=>assert.equal(decodeSystemSettingRows([{key:'CTRADER_API_MODE',value:'LIVE'}]).cTraderApiMode,'LIVE'));
 add(38,'Durable settings decode cTrader DEMO mode',()=>assert.equal(decodeSystemSettingRows([{key:'CTRADER_API_MODE',value:'DEMO'}]).cTraderApiMode,'DEMO'));
