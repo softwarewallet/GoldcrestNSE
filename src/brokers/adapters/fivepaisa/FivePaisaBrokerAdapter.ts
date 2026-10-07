@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { generateFirstLiveFingerprint, maskReservationToken, hashReservationToken } from '../../../services/firstLiveService';
 import { executeQuery } from '../../../database/db';
 import { BaseBrokerAdapter } from '../BaseBrokerAdapter';
+import { killSwitch } from '../../safety/KillSwitch';
 import {
   BrokerAccountInfo,
   BrokerInstrument,
@@ -1142,7 +1143,15 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
     return instruments.find(i => i.symbol.replace(/^NSE:|^BSE:/, '').toUpperCase() === normalized) || null;
   }
 
-  async placeOrder(order: OrderRequest): Promise<NormalizedOrder> {
+  async preflightOrder(order: OrderRequest): Promise<void> {
+    if (killSwitch.isHalted()) {
+      throw new BrokerError(
+        'EMERGENCY_STOP_ACTIVE',
+        'EMERGENCY_STOP_ACTIVE: Emergency stop is active. Clear emergency stop before preflight.',
+        'FIVE_PAISA',
+        this.environment
+      );
+    }
     const systemConfig = getSystemConfig();
     const executionMode = systemConfig.executionMode || 'LIVE_DRY_RUN';
 
@@ -1335,11 +1344,20 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
     if (!instrument?.brokerInstrumentId) {
       throw new BrokerError('INVALID_SYMBOL', `5paisa authoritative scrip code is unavailable for ${order.symbol}.`, 'FIVE_PAISA', this.environment);
     }
+  }
 
+  async placeOrder(order: OrderRequest): Promise<NormalizedOrder> {
+    await this.preflightOrder(order);
+    
+    // Proceed with order construction and transmission...
     const isDeriv = order.market === 'INDIAN_OPTIONS' || order.market === 'INDIAN_FUTURES';
     const exchange = order.symbol.toUpperCase().startsWith('SENSEX') ? 'B' : 'N';
     const exchangeType = isDeriv ? 'D' : 'C';
     const remoteOrderId = (order.signalId || order.strategyId || `gc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 30);
+    const instrument = await this.getInstrument(order.symbol);
+    if (!instrument?.brokerInstrumentId) {
+      throw new BrokerError('INVALID_SYMBOL', `5paisa authoritative scrip code is unavailable for ${order.symbol}.`, 'FIVE_PAISA', this.environment);
+    }
 
     const payload = {
       head: {

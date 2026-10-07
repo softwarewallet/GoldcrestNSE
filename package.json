@@ -13,6 +13,7 @@
     "test:fno-certification": "tsx test/test_fno_certification.ts",
     "test:live-dry-run": "tsx test/test_live_dry_run_certification.ts",
     "test:first-live-certification": "cross-env GOLDCREST_DB_FILE=data/test_first_live_certification.sqlite tsx test/test_first_live_certification.ts",
+    "test:5paisa-preflight": "tsx test/test_5paisa_live_preflight_certification.ts",
     "test:auto_trade_readiness": "tsx test/test_auto_trade_readiness.ts",
     "test:phase8_5": "tsx test/test_phase8_5_broker_execution_certification.ts",
     "test:multi_currency": "tsx test/test_phase11_multi_currency_accounting.ts",
