@@ -211,8 +211,10 @@ async function promptForTotp(): Promise<string> {
 }
 
 async function runCertification() {
-  console.log('=== 5PAISA LIVE CONNECTIVITY AUDIT INITIATED ===');
   const logger = new AuditLogger();
+  console.log(`=== 5PAISA LIVE CONNECTIVITY AUDIT INITIATED ===`);
+  console.log(`Run ID: ${logger.getRunId()}`);
+  
   process.env.NODE_ENV = 'test';
 
   const results = {
@@ -233,35 +235,36 @@ async function runCertification() {
     zeroOrderSafety: 'PASS'
   };
 
-  // 1. Hard Zero-Order Network Guard
   const originalFetch = global.fetch;
-  (global as any).fetch = async (input: any, init?: any) => {
-    const url = String(input);
-    if (url.includes('/PlaceOrderRequest')) {
-      results.placeOrderAttempts++;
-      results.zeroOrderSafety = 'FAIL';
-      logger.logEvent('ORDER_SAFETY', 'PlaceOrderRequest', 'SECURITY_VIOLATION', { url });
-      throw new Error(`TEST SAFETY FAILURE: Real order endpoint attempted: /PlaceOrderRequest`);
-    }
-    if (url.includes('/ModifyOrderRequest')) {
-      results.modifyOrderAttempts++;
-      results.zeroOrderSafety = 'FAIL';
-      logger.logEvent('ORDER_SAFETY', 'ModifyOrderRequest', 'SECURITY_VIOLATION', { url });
-      throw new Error(`TEST SAFETY FAILURE: Real order endpoint attempted: /ModifyOrderRequest`);
-    }
-    if (url.includes('/CancelOrderRequest')) {
-      results.cancelOrderAttempts++;
-      results.zeroOrderSafety = 'FAIL';
-      logger.logEvent('ORDER_SAFETY', 'CancelOrderRequest', 'SECURITY_VIOLATION', { url });
-      throw new Error(`TEST SAFETY FAILURE: Real order endpoint attempted: /CancelOrderRequest`);
-    }
-    return originalFetch(input, init);
-  };
-
-  const adapter = new FivePaisaLiveAdapter();
-  const initialFirstLiveStatus = await firstLiveService.getStatus();
 
   try {
+    // 1. Hard Zero-Order Network Guard
+    (global as any).fetch = async (input: any, init?: any) => {
+      const url = String(input);
+      if (url.includes('/PlaceOrderRequest')) {
+        results.placeOrderAttempts++;
+        results.zeroOrderSafety = 'FAIL';
+        logger.logEvent('ORDER_SAFETY', 'PlaceOrderRequest', 'SECURITY_VIOLATION', { url });
+        throw new Error(`TEST SAFETY FAILURE: Real order endpoint attempted: /PlaceOrderRequest`);
+      }
+      if (url.includes('/ModifyOrderRequest')) {
+        results.modifyOrderAttempts++;
+        results.zeroOrderSafety = 'FAIL';
+        logger.logEvent('ORDER_SAFETY', 'ModifyOrderRequest', 'SECURITY_VIOLATION', { url });
+        throw new Error(`TEST SAFETY FAILURE: Real order endpoint attempted: /ModifyOrderRequest`);
+      }
+      if (url.includes('/CancelOrderRequest')) {
+        results.cancelOrderAttempts++;
+        results.zeroOrderSafety = 'FAIL';
+        logger.logEvent('ORDER_SAFETY', 'CancelOrderRequest', 'SECURITY_VIOLATION', { url });
+        throw new Error(`TEST SAFETY FAILURE: Real order endpoint attempted: /CancelOrderRequest`);
+      }
+      return originalFetch(input, init);
+    };
+
+    const adapter = new FivePaisaLiveAdapter();
+    const initialFirstLiveStatus = await firstLiveService.getStatus();
+
     // 2. Authentication
     logger.logEvent('AUTHENTICATION', 'login', 'WAITING_FOR_TOTP', { message: '5paisa authentication requires manual TOTP' });
     
@@ -289,6 +292,7 @@ async function runCertification() {
     }
 
     if (results.authentication === 'PASS') {
+      // Authenticated tests...
       // 3. Account Discovery
       const accStart = Date.now();
       try {
@@ -397,15 +401,40 @@ async function runCertification() {
     logger.logEvent('CRITICAL', 'main', 'ERROR', { error: err.message });
   } finally {
     global.fetch = originalFetch;
+    
+    // Ensure log directory exists one last time just in case
+    if (!fs.existsSync(LOG_DIR)) {
+      fs.mkdirSync(LOG_DIR, { recursive: true });
+    }
+    
     await logger.writeLogs(results);
+    
+    // Verify physical file creation
+    const jsonExists = fs.existsSync(JSON_LOG_PATH);
+    const txtExists = fs.existsSync(TXT_LOG_PATH);
+    const jsonSize = jsonExists ? fs.statSync(JSON_LOG_PATH).size : 0;
+    const txtSize = txtExists ? fs.statSync(TXT_LOG_PATH).size : 0;
+
+    console.log('\n============================================================');
+    console.log('AUDIT LOG FILES');
+    console.log('============================================================');
+    console.log(`JSON Path: ${path.resolve(JSON_LOG_PATH)}`);
+    console.log(`TXT Path:  ${path.resolve(TXT_LOG_PATH)}`);
+    console.log(`JSON exists: ${jsonExists ? 'YES' : 'NO'}`);
+    console.log(`TXT exists:  ${txtExists ? 'YES' : 'NO'}`);
+    console.log(`JSON size:   ${jsonSize} bytes`);
+    console.log(`TXT size:    ${txtSize} bytes`);
+    console.log('============================================================');
+
     console.log('\n=== CONNECTIVITY AUDIT COMPLETE ===');
-    if (results.overallConnectivity !== 'PASS' || results.zeroOrderSafety !== 'PASS') {
-        process.exit(1);
+    
+    if (results.overallConnectivity !== 'PASS' || results.zeroOrderSafety !== 'PASS' || !jsonExists || !txtExists || jsonSize === 0 || txtSize === 0) {
+        process.exitCode = 1;
     }
   }
 }
 
 runCertification().catch(err => {
-    console.error('Certification failed to execute:', err);
+    console.error('Certification execution failed:', err);
     process.exit(1);
 });
