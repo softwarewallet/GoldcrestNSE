@@ -45,6 +45,7 @@ export type BrokerErrorCode =
   | 'NOT_SUPPORTED'
   | 'LIVE_ORDER_BLOCKED_BY_DRY_RUN'
   | 'FIRST_LIVE_ORDER_NOT_AUTHORIZED'
+  | 'SECURITY_VIOLATION'
   | 'UNKNOWN_ERROR';
 
 export type OrderType = 'MARKET' | 'LIMIT' | 'STOP' | 'STOP_LIMIT';
