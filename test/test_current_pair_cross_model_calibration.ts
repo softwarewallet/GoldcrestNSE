@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import { getDatabase, executeRun } from '../src/database/db';
+import { getCurrentPairCrossModelCalibration } from '../src/services/currentPairCrossModelCalibrationService';
+
+await getDatabase();
+await executeRun('DELETE FROM live_trade_research_predictions');
+const now=Date.now();
+const insert=async(id:string,model:string,symbol:string,timestamp:number,actual:'UP'|'DOWN',confidence:number)=>executeRun(`INSERT INTO live_trade_research_predictions (prediction_id,model_version,prediction_source,symbol,signal_id,predicted_at,horizon,predicted_direction,confidence,feature_hash,model_agreement,reasoning,invalidation,actual_direction,actual_return_pct,outcome_status,evaluated_at,created_at,feature_snapshot_json,prediction_context) VALUES (?,?,'TEST',?,?,?,?, 'UP',?,?,1,'test',null,?,1,'EVALUATED',?,?, '{}','CURRENT_PAIR')`,[id,model,symbol,id,timestamp,'1D',confidence,id+'-hash',actual,now,now]);
+for(let i=0;i<30;i++){const ts=now-60*86400000+i*1000;const actual=i<20?'UP':'DOWN';await insert(`old-b-${i}`,'PAIR_FEATURE_BASELINE_V2','EUR/USD',ts,actual,i<15?.60:.70);await insert(`old-a-${i}`,'LLAMA_GATEWAY_QWEN_LLAMA_V1','EUR/USD',ts,actual,i<15?.70:.80);}
+for(let i=0;i<30;i++){const ts=now-10*86400000+i*1000;const actual=i<24?'UP':'DOWN';await insert(`new-b-${i}`,'PAIR_FEATURE_BASELINE_V2','EUR/USD',ts,actual,i<15?.70:.80);await insert(`new-a-${i}`,'LLAMA_GATEWAY_QWEN_LLAMA_V1','EUR/USD',ts,actual,i<15?.85:.95);}
+for(let i=0;i<10;i++){const ts=now-10*86400000+i*1000;await insert(`new-b-gbp-${i}`,'PAIR_FEATURE_BASELINE_V2','GBP/USD',ts,'UP',.70);await insert(`new-a-gbp-${i}`,'LLAMA_GATEWAY_QWEN_LLAMA_V1','GBP/USD',ts,'UP',.80);}
+const report=await getCurrentPairCrossModelCalibration({now,horizon:'1D'});assert.equal(report.currentWindowDays,30);assert.equal(report.referenceWindowDays,90);assert.equal(report.minimumSampleCount,30);
+const eur=report.rows.find(row=>row.symbol==='EUR/USD'&&row.horizon==='1D');assert.ok(eur);assert.equal(eur.pairedObservations,60);assert.equal(eur.pairedEvaluated,60);assert.equal(eur.pairedPending,0);assert.equal(eur.baseline.current.directionalEvaluated,30);assert.equal(eur.ai.current.directionalEvaluated,30);assert.equal(eur.baseline.reference.directionalEvaluated,30);assert.equal(eur.ai.reference.directionalEvaluated,30);assert.equal(eur.baseline.current.sampleSufficient,true);assert.equal(eur.ai.current.sampleSufficient,true);assert.ok(eur.deltas.currentExpectedCalibrationErrorDeltaPct!=null);assert.ok(eur.deltas.currentCalibrationSlopeDelta!=null);assert.ok(eur.deltas.currentCalibrationInterceptDeltaPct!=null);assert.ok(eur.deltas.referenceExpectedCalibrationErrorDeltaPct!=null);
+const gbp=report.rows.find(row=>row.symbol==='GBP/USD'&&row.horizon==='1D');assert.ok(gbp);assert.equal(gbp.pairedObservations,10);assert.equal(gbp.pairedEvaluated,10);assert.equal(gbp.baseline.current.sampleSufficient,false);assert.equal(gbp.ai.current.sampleSufficient,false);assert.ok(gbp.deltas.currentExpectedCalibrationErrorDeltaPct!=null);
+console.log('CURRENT PAIR CROSS-MODEL CALIBRATION TEST PASSED');

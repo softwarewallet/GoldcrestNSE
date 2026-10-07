@@ -1,0 +1,44 @@
+import assert from 'node:assert/strict';
+import { getDatabase, executeRun } from '../src/database/db';
+import { getCurrentPairCrossModelTemporalCalibration } from '../src/services/currentPairCrossModelTemporalCalibrationService';
+
+await getDatabase();
+await executeRun('DELETE FROM live_trade_research_predictions');
+const now=Date.now();
+const insert=async(id:string,model:string,timestamp:number,actual:'UP'|'DOWN',confidence:number)=>executeRun(`INSERT INTO live_trade_research_predictions (prediction_id,model_version,prediction_source,symbol,signal_id,predicted_at,horizon,predicted_direction,confidence,feature_hash,model_agreement,reasoning,invalidation,actual_direction,actual_return_pct,outcome_status,evaluated_at,created_at,feature_snapshot_json,prediction_context) VALUES (?,?,'TEST','EUR/USD',?,?,?,?,?,?,1,'test',null,?,1,'EVALUATED',?,?, '{}','CURRENT_PAIR')`,[id,model,id,timestamp,'1D','UP',confidence,id+'-hash',actual,now,now]);
+for(let i=0;i<45;i++){
+  const ts=now-(i+2)*2*60*60*1000+60000;
+  const actual=i<30?'UP':'DOWN';
+  await insert('b-'+i,'PAIR_FEATURE_BASELINE_V2',ts,actual,.65);
+  await insert('a-'+i,'LLAMA_GATEWAY_QWEN_LLAMA_V1',ts,actual,i<30?.70:.85);
+}
+const report=await getCurrentPairCrossModelTemporalCalibration({now,horizon:'1D'});
+assert.deepEqual(report.windowsDays,[7,14,30,60,90]);
+assert.equal(report.minimumSampleCount,30);
+const row=report.rows.find(r=>r.symbol==='EUR/USD'&&r.horizon==='1D');
+assert.ok(row);
+assert.equal(row.windows.length,5);
+assert.equal(row.pairedObservations,45);
+assert.equal(row.pairedEvaluated,34);
+assert.equal(row.windows[0].windowDays,7);
+assert.ok(row.windows[0].baseline.directionalEvaluated>0);
+assert.ok(row.windows[0].ai.directionalEvaluated>0);
+assert.ok(row.windows[0].deltas.confidencePct!==null);
+assert.equal(row.windows[0].baseline.calibrationBuckets.length,5);
+assert.equal(row.windows[0].ai.calibrationBuckets.length,5);
+assert.equal(row.windows[0].deltas.calibrationBuckets.length,5);
+const bucket=row.windows[4].ai.calibrationBuckets[3];
+assert.equal(bucket.lowerPct,60);
+assert.equal(bucket.upperPct,80);
+assert.ok(bucket.accuracyConfidenceInterval95Pct);
+assert.equal(bucket.sampleSufficient,false);
+assert.ok(bucket.calibrationGapPct!==null);
+assert.ok(row.windows[4].deltas.calibrationBuckets[3].calibrationGapPct!==null);
+assert.equal(row.windows[2].baseline.sampleSufficient,true);
+assert.ok(row.windows[2].bootstrap.accuracyDelta95Pct);
+assert.ok(row.windows[2].bootstrap.confidenceDelta95Pct);
+assert.ok(row.windows[2].bootstrap.expectedCalibrationErrorDelta95Pct);
+assert.ok(row.windows[2].bootstrap.maximumCalibrationErrorDelta95Pct===null||row.windows[2].bootstrap.maximumCalibrationErrorDelta95Pct.lowerPct<=row.windows[2].bootstrap.maximumCalibrationErrorDelta95Pct.upperPct);
+assert.ok(row.windows[2].bootstrap.accuracyDelta95Pct.lowerPct<=row.windows[2].bootstrap.accuracyDelta95Pct.upperPct);
+assert.equal(row.windows[2].ai.sampleSufficient,true);
+console.log('CURRENT PAIR CROSS-MODEL TEMPORAL CALIBRATION TEST PASSED');

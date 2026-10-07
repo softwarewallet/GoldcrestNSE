@@ -1,0 +1,4 @@
+trade.goldcrestfinman.com {
+    encode gzip
+    reverse_proxy goldcrest:3000
+}

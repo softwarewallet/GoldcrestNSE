@@ -1,0 +1,12 @@
+node_modules
+dist
+data
+.git
+.github
+*.log
+.env
+.env.*
+!.env.example
+README.md
+RUNBOOK.md
+test
