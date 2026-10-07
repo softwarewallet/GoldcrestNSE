@@ -1387,8 +1387,9 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
 
     // INTERNAL CERTIFICATION BOUNDARY HOOK
     // This hook is strictly for automated zero-transmission certification.
-    // It must NEVER be used to bypass real broker authorization in production.
-    if ((global as any).__GOLDCREST_CERT_BOUNDARY_HOOK) {
+    // It is ONLY active when NODE_ENV is 'test' and must NEVER be used 
+    // to bypass real broker authorization in production.
+    if (process.env.NODE_ENV === 'test' && (global as any).__GOLDCREST_CERT_BOUNDARY_HOOK) {
       return (global as any).__GOLDCREST_CERT_BOUNDARY_HOOK(payload);
     }
 
