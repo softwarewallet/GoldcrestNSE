@@ -45,18 +45,31 @@ async function run5PaisaPreflightCertification() {
   // Test 1: Successful preflight
   console.log('\n[1] Testing Successful Preflight...');
   let transmissionCount = 0;
-  // Monkey-patch to track transmission
-  const originalPlaceOrder = (adapter as any).placeOrder;
-  (adapter as any).placeOrder = async (order: any) => {
+  
+  // Set up interception boundary
+  (global as any).__GOLDCREST_INTERCEPT_5PAISA_ORDER = (payload: any) => {
     transmissionCount++;
-    return originalPlaceOrder.call(adapter, order);
+    console.log('Intercepted order transmission attempt. payload=', JSON.stringify(payload));
   };
   
-  // Actually, I need to patch fetch to detect transmissions as per the requirements
-  // (Zero transmission, block at the boundary)
+  // Note: placeOrder calls preflightOrder. If preflightOrder throws, it stops.
+  // If preflightOrder passes, placeOrder reaches the interception hook, 
+  // which logs and returns a mock object, preventing fetch.
+  // The test should NOT expect an error if interception is handled.
   
-  await adapter.preflightOrder(validOrderRequest);
-  console.log('  ✓ Successful preflight passed.');
+  try {
+    await adapter.placeOrder(validOrderRequest);
+  } catch (err: any) {
+    console.log('Error caught during placeOrder (expected due to mock interception):', err.message);
+  }
+
+  // transmissionCount should be 1 because interception boundary was reached
+  if (transmissionCount !== 1) {
+    throw new Error('FAILED: Broker order transmission was NOT intercepted!');
+  }
+  
+  console.log('  ✓ Successful preflight passed, interception verified.');
+  delete (global as any).__GOLDCREST_INTERCEPT_5PAISA_ORDER;
 
   // Test 2: Emergency Stop
   console.log('\n[2] Testing Emergency Stop...');

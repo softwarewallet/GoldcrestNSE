@@ -1385,6 +1385,12 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
       throw new BrokerError('AUTHENTICATION_FAILED', '5paisa access token is unavailable for live order submission.', 'FIVE_PAISA', this.environment);
     }
 
+    // INTERCEPT: Boundary check for test
+    if ((global as any).__GOLDCREST_INTERCEPT_5PAISA_ORDER) {
+      (global as any).__GOLDCREST_INTERCEPT_5PAISA_ORDER(payload);
+      return { id: 'mocked-order-id', status: 'ACCEPTED' } as any;
+    }
+
     const response = await fetch(`${this.getApiHost()}/VendorsAPI/Service1.svc/V1/PlaceOrderRequest`, {
       method: 'POST',
       headers: {
