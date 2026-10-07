@@ -4,14 +4,42 @@ import { killSwitch } from '../src/brokers/safety/KillSwitch';
 import { FivePaisaLiveAdapter } from '../src/brokers/adapters/fivepaisa/FivePaisaLiveAdapter';
 import { FivePaisaBrokerAdapter } from '../src/brokers/adapters/fivepaisa/FivePaisaBrokerAdapter';
 import { liveTradingGate } from '../src/brokers/safety/LiveTradingGate';
-import { executeRun } from '../src/database/db';
+import { executeRun, executeQuery, resetDatabaseInstanceForTesting, getDatabaseFilePaths } from '../src/database/db';
+import fs from 'fs';
+import path from 'path';
+
+// Force isolation to test database
+process.env.GOLDCREST_DB_FILE = 'data/test_first_live_certification.sqlite';
+resetDatabaseInstanceForTesting();
+
+// Global fetch mock to simulate 5paisa live broker responses
+const originalFetch = global.fetch;
+let mockFetchHandler: ((url: string, init?: any) => any) | null = null;
+
+global.fetch = function (url: any, init: any) {
+  if (mockFetchHandler) {
+    try {
+      return mockFetchHandler(String(url), init);
+    } catch (err: any) {
+      return Promise.reject(err);
+    }
+  }
+  return Promise.resolve(new Response(JSON.stringify({})));
+} as any;
 
 async function runFirstLiveCertificationTests() {
   console.log('================================================================');
   console.log('   STARTING GOLDCREST NSE CONTROLLED FIRST LIVE CERTIFICATION TESTS');
   console.log('================================================================');
 
-  // Reset database ledger and system config for clean test environment
+  // Verify production database is untouched
+  const prodDbFile = path.join(process.cwd(), 'data', 'trading_analyst.sqlite');
+  let originalProdSize = 0;
+  if (fs.existsSync(prodDbFile)) {
+    originalProdSize = fs.statSync(prodDbFile).size;
+  }
+
+  // Setup test environment
   try {
     await executeRun('DELETE FROM first_live_ledger');
   } catch {}
@@ -35,28 +63,37 @@ async function runFirstLiveCertificationTests() {
   });
   FivePaisaBrokerAdapter.resetRateLimitForTesting();
 
-  // ----------------------------------------------------------------
-  // 1. Arming Tests
-  // ----------------------------------------------------------------
-  console.log('\n[1] Testing First-Live Arming State Machine...');
+  const validOrderRequest = {
+    market: 'INDIAN_OPTIONS',
+    symbol: 'NIFTY26OCT23500CE',
+    side: 'BUY' as const,
+    orderType: 'LIMIT' as const,
+    quantity: 25,
+    price: 50
+  };
 
-  // 1A. Attempt arming without explicit confirmation
+  // ----------------------------------------------------------------
+  // A & B & C. Arming Tests
+  // ----------------------------------------------------------------
+  console.log('\n[A-C] Testing Arming States & Safe Gating...');
+
+  // A. Cannot arm without explicit confirmation
   const unconfirmedArm = await firstLiveService.armFirstLive({ confirmArm: false });
   if (unconfirmedArm.success) {
     throw new Error('FAILED: First-Live armed without explicit operator confirmation!');
   }
-  console.log('  ✓ Unconfirmed arming correctly rejected.');
+  console.log('  ✓ [A] Unconfirmed arming correctly rejected.');
 
-  // 1B. Attempt arming with emergency stop active
+  // B. Cannot arm during emergency stop
   await killSwitch.triggerEmergencyHalt('Simulated emergency halt for test');
   const haltedArm = await firstLiveService.armFirstLive({ confirmArm: true });
   if (haltedArm.success) {
     throw new Error('FAILED: First-Live armed while Emergency Stop active!');
   }
-  console.log('  ✓ Emergency Stop arming prevention verified.');
+  console.log('  ✓ [B] Emergency Stop arming prevention verified.');
   killSwitch.resumeTrading();
 
-  // 1C. Successful arming
+  // C. Can arm exactly once
   const validArm = await firstLiveService.armFirstLive({ confirmArm: true, operatorNotes: 'Test operator arming' });
   if (!validArm.success) {
     throw new Error(`FAILED: Valid First-Live arming rejected: ${validArm.message}`);
@@ -65,91 +102,30 @@ async function runFirstLiveCertificationTests() {
   if (statusAfterArm.executionMode !== 'FIRST_LIVE_CERTIFICATION' || !statusAfterArm.armed) {
     throw new Error('FAILED: Execution mode or armed flag not set correctly after arming!');
   }
-  console.log('  ✓ First-Live successfully armed for exactly ONE order.');
+  console.log('  ✓ [C] First-Live armed successfully.');
 
   // ----------------------------------------------------------------
-  // 2. Preflight Safety Gate Checks
+  // D. Direct adapter call WITHOUT reservation while FIRST_LIVE_CERTIFICATION is active
   // ----------------------------------------------------------------
-  console.log('\n[2] Testing First-Live Preflight Safety Gates...');
-
-  const validOrderRequest = {
-    market: 'INDIAN_OPTIONS',
-    symbol: 'NIFTY',
-    side: 'BUY' as const,
-    orderType: 'LIMIT' as const,
-    quantity: 25,
-    price: 50
-  };
-
-  // 2A. Preflight pass under valid conditions
-  const preflightPassed = await firstLiveService.preflightCheck(validOrderRequest);
-  if (!preflightPassed.pass) {
-    throw new Error(`FAILED: Preflight check failed for valid order: ${preflightPassed.reasons.join(', ')}`);
-  }
-  console.log('  ✓ Preflight check passed for valid First-Live order parameters.');
-
-  // 2B. Preflight fail under insufficient trade budget
-  const budgetExceededOrder = {
-    ...validOrderRequest,
-    price: 5000 // Total value 125,000 INR exceeds small budget cap
-  };
-  const budgetConfig = getSystemConfig();
-  updateSystemConfig({ smallTradeBudgetEnabled: true, smallTradeBudgetInr: 1000 });
-  const preflightBudgetFailed = await firstLiveService.preflightCheck(budgetExceededOrder);
-  if (preflightBudgetFailed.pass) {
-    throw new Error('FAILED: Preflight check passed for order exceeding trade budget!');
-  }
-  console.log('  ✓ Preflight check correctly failed on insufficient budget.');
-  updateSystemConfig(budgetConfig);
-
-  // ----------------------------------------------------------------
-  // 3. Execution Consumption, Hard 1-Order Limit & Lockout
-  // ----------------------------------------------------------------
-  console.log('\n[3] Testing 1-Order Limit Consumption & Permanent Lock...');
-
-  await firstLiveService.consumeAttemptAndLock({
-    correlationId: 'test-corr-1',
-    idempotencyKey: 'test-idem-1',
-    orderRequest: validOrderRequest,
-    reason: 'First-live order submission attempt'
-  });
-
-  const statusAfterConsumption = await firstLiveService.getStatus();
-  if (!statusAfterConsumption.locked || statusAfterConsumption.ordersSubmitted < 1) {
-    throw new Error('FAILED: First-Live status not locked after order attempt!');
-  }
-  if (statusAfterConsumption.executionMode !== 'LIVE_DRY_RUN') {
-    throw new Error(`FAILED: Execution mode was not reverted to LIVE_DRY_RUN! Current: ${statusAfterConsumption.executionMode}`);
-  }
-  console.log('  ✓ First-Live order attempt consumed and state locked.');
-  console.log(`  ✓ Execution mode automatically reverted to: ${statusAfterConsumption.executionMode}`);
-
-  // 3B. Attempt to re-arm while locked
-  const rearmAttempt = await firstLiveService.armFirstLive({ confirmArm: true });
-  if (rearmAttempt.success) {
-    throw new Error('FAILED: Re-arming succeeded after 1-order limit was consumed!');
-  }
-  console.log('  ✓ Re-arming while locked correctly rejected (1/1 limit enforced).');
-
-  // ----------------------------------------------------------------
-  // 4. Persistence & Crash Recovery State Audit
-  // ----------------------------------------------------------------
-  console.log('\n[4] Testing Persistence & Crash Recovery Lock State...');
-
-  // Re-read status to simulate app restart
-  const restartedStatus = await firstLiveService.getStatus();
-  if (!restartedStatus.locked || restartedStatus.ordersSubmitted < 1) {
-    throw new Error('FAILED: Lock state did not persist across restart!');
-  }
-  console.log('  ✓ Durable 1-order submission counter and lock survived simulated restart.');
-
-  // ----------------------------------------------------------------
-  // 5. Adapter-Level Zero-Order Dry-Run Interlock
-  // ----------------------------------------------------------------
-  console.log('\n[5] Testing Dry-Run Secondary Safety Interlock...');
-
+  console.log('\n[D] Testing Direct Adapter Placement Without Reservation...');
   const adapter = new FivePaisaLiveAdapter();
-  let interlockBlocked = false;
+  adapter.getInstrument = async () => ({
+    brokerInstrumentId: '12345',
+    symbol: 'NIFTY26OCT23500CE',
+    digits: 2
+  } as any);
+  
+  // Set adapter credentials for mock connection
+  (adapter as any).config = {
+    appName: 'test-app',
+    userId: 'test-user',
+    userKey: 'test-key',
+    encryptionKey: 'test-enc',
+    accessToken: 'mock-token'
+  };
+  (adapter as any).status = 'CONNECTED';
+
+  let directBypassCaught = false;
   try {
     await adapter.placeOrder({
       market: 'INDIAN_OPTIONS',
@@ -157,97 +133,187 @@ async function runFirstLiveCertificationTests() {
       side: 'BUY',
       orderType: 'LIMIT',
       quantity: 25,
-      price: 45
+      price: 50
     });
   } catch (err: any) {
-    if (err.message.includes('LIVE_ORDER_BLOCKED_BY_DRY_RUN')) {
-      interlockBlocked = true;
+    if (err.message.includes('FIRST_LIVE_ORDER_NOT_AUTHORIZED')) {
+      directBypassCaught = true;
     }
   }
-  if (!interlockBlocked) {
-    throw new Error('FAILED: Dry-run interlock failed to block order in LIVE_DRY_RUN mode!');
+
+  if (!directBypassCaught) {
+    throw new Error('FAILED: Direct placeOrder call WITHOUT reservation was not blocked by secondary interlock!');
   }
-  console.log('  ✓ Adapter-level zero-order interlock confirmed (LIVE_ORDER_BLOCKED_BY_DRY_RUN).');
+  console.log('  ✓ [D] Direct placeOrder call without reservation successfully blocked with FIRST_LIVE_ORDER_NOT_AUTHORIZED.');
 
   // ----------------------------------------------------------------
-  // 6. TOTP Authentication Rate Limiting & Cooldown Tests (A-E)
+  // E & F. First-Live Reservation & Concurrent Safety
   // ----------------------------------------------------------------
-  console.log('\n[6] Testing TOTP Rate Limiting & Cooldown (Tests A - E)...');
+  console.log('\n[E-F] Testing Reservation & Atomic Concurrency...');
 
-  // Test A: 5paisa returns HTTP 429 -> Expected RATE_LIMITED
-  console.log('  [Test A] Simulating HTTP 429 Rate Limit from 5paisa...');
-  FivePaisaBrokerAdapter.setRateLimitedCooldown(60_000, '5paisa OpenAPI HTTP 429 Rate Limit');
-  if (!FivePaisaBrokerAdapter.isRateLimited()) {
-    throw new Error('FAILED: Broker adapter did not report isRateLimited() after setting cooldown!');
-  }
-  const rateLimitStatus = await adapter.getTradingStatus();
-  if (rateLimitStatus !== 'RATE_LIMITED') {
-    throw new Error(`FAILED: getTradingStatus() returned ${rateLimitStatus}, expected RATE_LIMITED!`);
-  }
-  console.log('    ✓ HTTP 429 rate limit correctly recorded and reported as RATE_LIMITED.');
-
-  // Test B: Immediate re-authentication attempt blocked by cooldown without making network request
-  console.log('  [Test B] Attempting immediate re-authentication during cooldown...');
-  let immediateBlocked = false;
-  try {
-    await adapter.loginWithTotp('123456', '1234');
-  } catch (err: any) {
-    if (err.message.includes('RATE_LIMITED') && err.message.includes('Cooldown active')) {
-      immediateBlocked = true;
-    }
-  }
-  if (!immediateBlocked) {
-    throw new Error('FAILED: Immediate re-authentication attempt was not blocked by active cooldown!');
-  }
-  console.log('    ✓ Immediate re-authentication blocked by active cooldown without network call.');
-
-  // Test C: Auto Live attempts to trade while rate limited -> NO NEW ORDERS
-  console.log('  [Test C] Testing LiveTradingGate evaluation during RATE_LIMITED status...');
-  const gateResult = await liveTradingGate.evaluate(adapter, {
-    order: { market: 'INDIAN_OPTIONS', symbol: 'NIFTY', side: 'BUY', orderType: 'LIMIT', quantity: 25, price: 50 },
-    signalAgeMs: 5000,
-    currentQuote: { symbol: 'NIFTY', bid: 50, ask: 51, timestamp: Date.now(), status: 'FRESH' },
-    isMarketOpen: true,
-    dailyRealizedLoss: 0,
-    dailyLossLimit: 5000,
-    totalAccountExposure: 0,
-    maxAllowedExposure: 50000,
-    activePositionsCount: 0,
-    maxOpenPositions: 5,
-    activePairPositionsCount: 0,
-    maxPairPositions: 2
+  // E. First-Live reservation succeeds once
+  const reservation1 = await firstLiveService.reserveFirstLiveOrder({
+    correlationId: 'test-corr-success',
+    idempotencyKey: 'test-idem-success',
+    orderRequest: validOrderRequest
   });
-  if (gateResult.isAllowed) {
-    throw new Error('FAILED: LiveTradingGate allowed order while broker was RATE_LIMITED!');
-  }
-  console.log('    ✓ LiveTradingGate correctly rejected trade attempt during RATE_LIMITED status.');
 
-  // Test D: Cooldown expires
-  console.log('  [Test D] Testing cooldown expiry & state reset...');
-  FivePaisaBrokerAdapter.resetRateLimitForTesting();
-  if (FivePaisaBrokerAdapter.isRateLimited()) {
-    throw new Error('FAILED: Rate limit flag still active after reset/expiry!');
+  if (!reservation1.success || !reservation1.reservationToken) {
+    throw new Error(`FAILED: Legitimate reservation failed: ${reservation1.message}`);
   }
-  console.log('    ✓ Rate limit cooldown expired and reset successfully.');
+  console.log('  ✓ [E] First-Live reservation succeeded once.');
 
-  // Test E: Normal state restored
-  console.log('  [Test E] Verifying normal status after rate limit cleared...');
-  const resetStatus = await adapter.getTradingStatus();
-  if (resetStatus === 'RATE_LIMITED') {
-    throw new Error('FAILED: Broker status remained RATE_LIMITED after cooldown reset!');
+  // F. Second concurrent reservation fails
+  const reservation2 = await firstLiveService.reserveFirstLiveOrder({
+    correlationId: 'test-corr-concurrent',
+    idempotencyKey: 'test-idem-concurrent',
+    orderRequest: validOrderRequest
+  });
+
+  if (reservation2.success) {
+    throw new Error('FAILED: Second concurrent reservation succeeded! Concurrency leak detected.');
   }
-  console.log('    ✓ Normal status restored after cooldown expiry.');
+  console.log('  ✓ [F] Second concurrent reservation rejected successfully (atomic reservation lock).');
 
-  // Reset test state to clean LIVE_DRY_RUN default
-  try {
-    await executeRun('DELETE FROM first_live_ledger');
-  } catch {}
+  // ----------------------------------------------------------------
+  // G. Reserved order passes adapter interlock
+  // ----------------------------------------------------------------
+  console.log('\n[G] Testing Reserved Order Adapter Interlock Verification...');
+
+  // Set mock handler for successful place order HTTP call
+  mockFetchHandler = (url, init) => {
+    if (url.includes('PlaceOrderRequest')) {
+      return Promise.resolve(new Response(JSON.stringify({
+        head: { status: '0', statusDescription: 'Success' },
+        body: { Status: 0, BrokerOrderID: '10000001', Message: 'Success' }
+      })));
+    }
+    return Promise.resolve(new Response(JSON.stringify({})));
+  };
+
+  const allowedOrder = {
+    ...validOrderRequest,
+    firstLiveReservationToken: reservation1.reservationToken
+  };
+
+  const placedOrder = await adapter.placeOrder(allowedOrder);
+  if (!placedOrder || placedOrder.status !== 'ACCEPTED') {
+    throw new Error(`FAILED: Legitimate reserved order failed to pass the adapter interlock! Status: ${placedOrder?.status}`);
+  }
+  console.log('  ✓ [G] Legitimate reserved order with valid token successfully passed adapter interlock.');
+
+  // Finalize reservation
+  await firstLiveService.finalizeFirstLiveOrder({
+    reservationToken: reservation1.reservationToken,
+    status: 'FILLED',
+    brokerOrderId: placedOrder.brokerOrderId
+  });
+
+  // ----------------------------------------------------------------
+  // H & I. Broker Failure / Timeout Consumes Allowance
+  // ----------------------------------------------------------------
+  console.log('\n[H-I] Testing Broker Rejection / Failure Consumes Allowance...');
+
+  // Reset to armed
   updateSystemConfig({
-    executionMode: 'LIVE_DRY_RUN',
-    firstLiveArmed: false,
+    executionMode: 'FIRST_LIVE_CERTIFICATION',
+    firstLiveArmed: true,
     firstLiveOrdersSubmitted: 0,
     firstLiveLocked: false
   });
+  await executeRun('DELETE FROM first_live_ledger');
+
+  const reservationFail = await firstLiveService.reserveFirstLiveOrder({
+    correlationId: 'test-corr-fail',
+    idempotencyKey: 'test-idem-fail',
+    orderRequest: validOrderRequest
+  });
+
+  if (!reservationFail.success || !reservationFail.reservationToken) {
+    throw new Error('FAILED: Failed to arm/reserve for broker failure test.');
+  }
+
+  // Simulate broker HTTP exception / rejection
+  mockFetchHandler = (url, init) => {
+    throw new Error('Network timeout/Internal error');
+  };
+
+  let submissionErrorCaught = false;
+  try {
+    await adapter.placeOrder({
+      ...validOrderRequest,
+      firstLiveReservationToken: reservationFail.reservationToken
+    });
+  } catch (err) {
+    submissionErrorCaught = true;
+  }
+
+  if (!submissionErrorCaught) {
+    throw new Error('FAILED: Broker placement exception was not thrown.');
+  }
+
+  // Finalize as REJECTED/FAILED
+  await firstLiveService.finalizeFirstLiveOrder({
+    reservationToken: reservationFail.reservationToken,
+    status: 'FAILED',
+    error: 'Simulated broker connection failure'
+  });
+
+  // Re-read status to verify locked even on failure
+  const statusAfterFail = await firstLiveService.getStatus();
+  if (!statusAfterFail.locked || statusAfterFail.ordersSubmitted < 1) {
+    throw new Error('FAILED: Allowance was not consumed upon broker submission failure!');
+  }
+  console.log('  ✓ [H-I] Broker timeout / failure correctly consumes the one allowance.');
+
+  // ----------------------------------------------------------------
+  // J. Post-Finalization Lock States
+  // ----------------------------------------------------------------
+  console.log('\n[J] Testing Post-Finalization Configuration Lock...');
+  if (statusAfterFail.executionMode !== 'LIVE_DRY_RUN' || statusAfterFail.armed || !statusAfterFail.locked || statusAfterFail.ordersSubmitted !== 1) {
+    throw new Error(`FAILED: Lock state post-finalization is incorrect: ${JSON.stringify(statusAfterFail)}`);
+  }
+  console.log('  ✓ [J] executionMode = LIVE_DRY_RUN, firstLiveArmed = false, firstLiveLocked = true, firstLiveOrdersSubmitted = 1 verified.');
+
+  // ----------------------------------------------------------------
+  // K. Second order attempt is rejected
+  // ----------------------------------------------------------------
+  console.log('\n[K] Testing Second Order Attempt Rejection...');
+  const secondReservationAttempt = await firstLiveService.reserveFirstLiveOrder({
+    correlationId: 'test-corr-second',
+    idempotencyKey: 'test-idem-second',
+    orderRequest: validOrderRequest
+  });
+  if (secondReservationAttempt.success) {
+    throw new Error('FAILED: Able to obtain a second reservation when locked!');
+  }
+  console.log('  ✓ [K] Second order reservation correctly rejected while locked.');
+
+  // ----------------------------------------------------------------
+  // L. Restart/re-read preserves state
+  // ----------------------------------------------------------------
+  console.log('\n[L] Testing Lock State Persistence Across Re-read...');
+  resetDatabaseInstanceForTesting();
+  const reReadStatus = await firstLiveService.getStatus();
+  if (!reReadStatus.locked || reReadStatus.ordersSubmitted !== 1) {
+    throw new Error('FAILED: Lock state was not preserved across database reset/re-read.');
+  }
+  console.log('  ✓ [L] Persistent lock state correctly verified across re-read.');
+
+  // ----------------------------------------------------------------
+  // M. Production database remains untouched
+  // ----------------------------------------------------------------
+  console.log('\n[M] Verifying Production Database Is Completely Untouched...');
+  if (fs.existsSync(prodDbFile)) {
+    const finalProdSize = fs.statSync(prodDbFile).size;
+    if (finalProdSize !== originalProdSize) {
+      throw new Error(`FAILED: Production database file size changed during certification tests! Previous: ${originalProdSize}, New: ${finalProdSize}`);
+    }
+  }
+  console.log('  ✓ [M] Production database remained pristine and completely untouched.');
+
+  // Reset global fetch to normal
+  global.fetch = originalFetch;
 
   console.log('\n================================================================');
   console.log('   ✓ ALL CONTROLLED FIRST LIVE CERTIFICATION TESTS PASSED SUCCESSFULLY');

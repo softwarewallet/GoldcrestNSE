@@ -44,6 +44,7 @@ export type BrokerErrorCode =
   | 'INVALID_STOP'
   | 'NOT_SUPPORTED'
   | 'LIVE_ORDER_BLOCKED_BY_DRY_RUN'
+  | 'FIRST_LIVE_ORDER_NOT_AUTHORIZED'
   | 'UNKNOWN_ERROR';
 
 export type OrderType = 'MARKET' | 'LIMIT' | 'STOP' | 'STOP_LIMIT';
@@ -165,6 +166,8 @@ export interface OrderRequest {
   strategyId?: string;
   signalId?: string;
   comment?: string;
+  /** Internal server-generated First-Live reservation token */
+  firstLiveReservationToken?: string;
 }
 
 export interface OrderModification {

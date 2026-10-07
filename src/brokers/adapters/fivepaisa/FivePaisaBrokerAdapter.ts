@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { executeQuery } from '../../../database/db';
 import { BaseBrokerAdapter } from '../BaseBrokerAdapter';
 import {
   BrokerAccountInfo,
@@ -1143,7 +1144,40 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
   async placeOrder(order: OrderRequest): Promise<NormalizedOrder> {
     const systemConfig = getSystemConfig();
     const executionMode = systemConfig.executionMode || 'LIVE_DRY_RUN';
-    if (executionMode === 'LIVE_DRY_RUN') {
+
+    // Validate First-Live reservation token if present
+    const reservationToken = order.firstLiveReservationToken || (order as any)._firstLiveReservationToken;
+    let isAuthorizedFirstLive = false;
+
+    if (reservationToken) {
+      const rows = await executeQuery<any>(
+        'SELECT * FROM first_live_ledger WHERE (id = ? OR reservation_token = ?) AND status = ? LIMIT 1',
+        [reservationToken, reservationToken, 'RESERVED']
+      );
+
+      const reservation = rows[0];
+      if (reservation) {
+        isAuthorizedFirstLive = true;
+      } else {
+        throw new BrokerError(
+          'FIRST_LIVE_ORDER_NOT_AUTHORIZED',
+          `FIRST_LIVE_ORDER_NOT_AUTHORIZED: Reservation token '${reservationToken}' is invalid or not in RESERVED status.`,
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+    }
+
+    if (executionMode === 'FIRST_LIVE_CERTIFICATION' && !isAuthorizedFirstLive) {
+      throw new BrokerError(
+        'FIRST_LIVE_ORDER_NOT_AUTHORIZED',
+        'FIRST_LIVE_ORDER_NOT_AUTHORIZED: Direct broker order call blocked in FIRST_LIVE_CERTIFICATION mode without a valid server reservation token.',
+        'FIVE_PAISA',
+        this.environment
+      );
+    }
+
+    if (executionMode === 'LIVE_DRY_RUN' && !isAuthorizedFirstLive) {
       throw new BrokerError(
         'LIVE_ORDER_BLOCKED_BY_DRY_RUN',
         'LIVE_ORDER_BLOCKED_BY_DRY_RUN: Order placement is blocked because GoldcrestNSE is running in LIVE_DRY_RUN mode. No real broker orders are transmitted.',

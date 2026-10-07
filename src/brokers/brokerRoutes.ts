@@ -15,6 +15,7 @@ import { executeQuery, executeRun } from '../database/db';
 import { calculateForexPipTargets, normalizePriceToThreeDigits, normalizePriceToInstrumentDigits, sizeForexOrderToMaxTradeValue } from './safety/TradeSizing';
 import { liveRuntimeLog } from '../services/liveRuntimeLog';
 import { autoTradingService } from '../services/autoTradingService';
+import { firstLiveService } from '../services/firstLiveService';
 
 import { FivePaisaBrokerAdapter } from './adapters/fivepaisa/FivePaisaBrokerAdapter';
 
@@ -1146,10 +1147,67 @@ brokerRouter.post('/order', async (req: Request, res: Response) => {
       });
     }
 
+    const config = getSystemConfig();
+    const currentExecMode = config.executionMode || 'LIVE_DRY_RUN';
+
+    let reservationToken: string | null = null;
+    if (currentExecMode === 'FIRST_LIVE_CERTIFICATION') {
+      const preflight = await firstLiveService.preflightCheck(orderReq);
+      if (!preflight.pass) {
+        await failExecutionIntent(idempotencyKey, {
+          broker,
+          market: orderReq.market,
+          symbol: orderReq.symbol,
+          submissionState: 'REJECTED_OR_FAILED',
+          error: preflight.reasons.join(', '),
+          code: 'FIRST_LIVE_PREFLIGHT_FAILED',
+          failedAt: Date.now()
+        });
+        return res.status(403).json({
+          error: `First-Live preflight checks failed: ${preflight.reasons.join(', ')}`,
+          code: 'FIRST_LIVE_PREFLIGHT_FAILED',
+          details: preflight.reasons
+        });
+      }
+
+      const correlationId = orderReq.signalId || orderReq.strategyId || idempotencyKey || `fl-corr-${Date.now()}`;
+      const reservation = await firstLiveService.reserveFirstLiveOrder({
+        correlationId,
+        idempotencyKey,
+        orderRequest: orderReq
+      });
+
+      if (!reservation.success || !reservation.reservationToken) {
+        await failExecutionIntent(idempotencyKey, {
+          broker,
+          market: orderReq.market,
+          symbol: orderReq.symbol,
+          submissionState: 'REJECTED_OR_FAILED',
+          error: reservation.message,
+          code: 'FIRST_LIVE_RESERVATION_FAILED',
+          failedAt: Date.now()
+        });
+        return res.status(403).json({
+          error: reservation.message,
+          code: 'FIRST_LIVE_RESERVATION_FAILED'
+        });
+      }
+
+      reservationToken = reservation.reservationToken;
+      orderReq.firstLiveReservationToken = reservationToken;
+    }
+
     let placedOrder;
     try {
       placedOrder = await adapter.placeOrder(orderReq);
     } catch (err: any) {
+      if (reservationToken) {
+        await firstLiveService.finalizeFirstLiveOrder({
+          reservationToken,
+          status: 'REJECTED',
+          error: err?.message || String(err)
+        });
+      }
       await failExecutionIntent(idempotencyKey, {
         broker,
         market: orderReq.market,
@@ -1160,6 +1218,15 @@ brokerRouter.post('/order', async (req: Request, res: Response) => {
         failedAt: Date.now()
       });
       throw err;
+    }
+
+    if (reservationToken) {
+      await firstLiveService.finalizeFirstLiveOrder({
+        reservationToken,
+        status: placedOrder.status === 'FILLED' ? 'FILLED' : 'ACCEPTED',
+        brokerOrderId: placedOrder.brokerOrderId || placedOrder.id,
+        result: placedOrder
+      });
     }
 
     if (placedOrder.status === 'FILLED') {

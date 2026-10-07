@@ -1,5 +1,5 @@
 import { getSystemConfig, updateSystemConfig } from './configService';
-import { executeQuery, executeRun } from '../database/db';
+import { executeQuery, executeRun, executeTransaction } from '../database/db';
 import { liveRuntimeLog, tradeAuditLog } from './liveRuntimeLog';
 import { killSwitch } from '../brokers/safety/KillSwitch';
 import { brokerRegistry } from '../brokers/registry';
@@ -16,6 +16,26 @@ export interface FirstLiveStatus {
   armedAt: number | null;
 }
 
+export interface ReserveFirstLiveOrderParams {
+  correlationId: string;
+  idempotencyKey: string;
+  orderRequest: OrderRequest;
+}
+
+export interface ReserveFirstLiveOrderResult {
+  success: boolean;
+  reservationToken: string | null;
+  message: string;
+}
+
+export interface FinalizeFirstLiveOrderParams {
+  reservationToken: string;
+  status: 'ACCEPTED' | 'FILLED' | 'REJECTED' | 'FAILED' | 'ATTEMPTED';
+  brokerOrderId?: string;
+  error?: string;
+  result?: any;
+}
+
 export class FirstLiveService {
   /**
    * Retrieves the current First-Live status, reconciling persistent state with SQLite ledger.
@@ -27,8 +47,8 @@ export class FirstLiveService {
     let submittedCount = 0;
     try {
       const rows = await executeQuery<any>(
-        'SELECT COUNT(*) as cnt FROM first_live_ledger WHERE status IN (?, ?, ?, ?)',
-        ['ATTEMPTED', 'ACCEPTED', 'FILLED', 'REJECTED']
+        'SELECT COUNT(*) as cnt FROM first_live_ledger WHERE status IN (?, ?, ?, ?, ?, ?)',
+        ['RESERVED', 'ATTEMPTED', 'ACCEPTED', 'FILLED', 'REJECTED', 'FAILED']
       );
       submittedCount = Number(rows[0]?.cnt || 0);
     } catch {
@@ -176,18 +196,135 @@ export class FirstLiveService {
   }
 
   /**
-   * Consumes the single First-Live attempt, locks First-Live mode,
-   * reverts system config to LIVE_DRY_RUN, and logs the durable execution attempt.
+   * Atomically reserves the single First-Live order.
+   * Generates a durable reservation token, persists it in first_live_ledger,
+   * updates persistent system config, and locks further reservations.
    */
-  async consumeAttemptAndLock(details: {
-    correlationId: string;
-    idempotencyKey: string;
-    orderRequest: OrderRequest;
-    reason: string;
-  }): Promise<void> {
+  async reserveFirstLiveOrder(params: ReserveFirstLiveOrderParams): Promise<ReserveFirstLiveOrderResult> {
+    const { correlationId, idempotencyKey, orderRequest } = params;
+
+    return executeTransaction((db) => {
+      const config = getSystemConfig();
+      const mode = config.executionMode || 'LIVE_DRY_RUN';
+
+      if (mode !== 'FIRST_LIVE_CERTIFICATION') {
+        return {
+          success: false,
+          reservationToken: null,
+          message: `FIRST_LIVE_RESERVATION_FAILED: System execution mode is ${mode}, not FIRST_LIVE_CERTIFICATION.`
+        };
+      }
+
+      if (!config.firstLiveArmed) {
+        return {
+          success: false,
+          reservationToken: null,
+          message: 'FIRST_LIVE_RESERVATION_FAILED: First-Live mode is not armed.'
+        };
+      }
+
+      if (config.firstLiveLocked || (config.firstLiveOrdersSubmitted || 0) >= 1) {
+        return {
+          success: false,
+          reservationToken: null,
+          message: 'FIRST_LIVE_RESERVATION_FAILED: First-Live order budget has already been consumed (1/1 orders used).'
+        };
+      }
+
+      if (killSwitch.isHalted()) {
+        return {
+          success: false,
+          reservationToken: null,
+          message: 'FIRST_LIVE_RESERVATION_FAILED: Emergency stop is active.'
+        };
+      }
+
+      const stmt = db.prepare(
+        "SELECT COUNT(*) as cnt FROM first_live_ledger WHERE status IN ('RESERVED', 'ATTEMPTED', 'ACCEPTED', 'FILLED', 'REJECTED', 'FAILED')"
+      );
+      let count = 0;
+      if (stmt.step()) {
+        const row = stmt.getAsObject();
+        count = Number(row.cnt || 0);
+      }
+      stmt.free();
+
+      if (count >= 1) {
+        return {
+          success: false,
+          reservationToken: null,
+          message: 'FIRST_LIVE_RESERVATION_FAILED: First-Live single order allowance is already reserved or submitted in ledger.'
+        };
+      }
+
+      const now = Date.now();
+      const randomSeed = Math.random().toString(36).substring(2, 12) + Math.random().toString(36).substring(2, 12);
+      const reservationToken = `fl-res-${now}-${randomSeed}`;
+
+      const newCount = Math.max(1, (config.firstLiveOrdersSubmitted || 0) + 1);
+      updateSystemConfig({
+        executionMode: 'LIVE_DRY_RUN',
+        firstLiveArmed: false,
+        firstLiveOrdersSubmitted: newCount,
+        firstLiveLocked: true
+      });
+
+      db.run(
+        `INSERT INTO first_live_ledger (
+          id, reservation_token, correlation_id, idempotency_key, broker, environment, execution_mode,
+          symbol, side, quantity, requested_price, status, attempted_at, payload_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          reservationToken,
+          reservationToken,
+          correlationId,
+          idempotencyKey,
+          (orderRequest as any).broker || 'FIVE_PAISA',
+          'LIVE',
+          'FIRST_LIVE_CERTIFICATION',
+          orderRequest.symbol,
+          orderRequest.side,
+          orderRequest.quantity,
+          orderRequest.price || 0,
+          'RESERVED',
+          now,
+          JSON.stringify({ correlationId, idempotencyKey, orderRequest, reservationToken, reservedAt: now })
+        ]
+      );
+
+      liveRuntimeLog('SYSTEM', 'FIRST_LIVE_RESERVED', {
+        reservationToken,
+        correlationId,
+        idempotencyKey,
+        symbol: orderRequest.symbol,
+        timestamp: new Date(now).toISOString()
+      });
+
+      tradeAuditLog('FIRST_LIVE_RESERVED', {
+        broker: 'FIVE_PAISA',
+        environment: 'LIVE',
+        result: 'SUCCESS',
+        details: { reservationToken, correlationId, idempotencyKey, symbol: orderRequest.symbol }
+      });
+
+      return {
+        success: true,
+        reservationToken,
+        message: 'First-Live order successfully reserved.'
+      };
+    });
+  }
+
+  /**
+   * Finalizes a reserved First-Live order.
+   * Updates SQLite ledger with terminal status and ensures system remains locked in LIVE_DRY_RUN.
+   */
+  async finalizeFirstLiveOrder(params: FinalizeFirstLiveOrderParams): Promise<void> {
+    const { reservationToken, status, brokerOrderId, error, result } = params;
     const now = Date.now();
+
     const config = getSystemConfig();
-    const newCount = Math.max(1, (config.firstLiveOrdersSubmitted || 0) + 1);
+    const newCount = Math.max(1, config.firstLiveOrdersSubmitted || 0);
 
     updateSystemConfig({
       executionMode: 'LIVE_DRY_RUN',
@@ -198,37 +335,58 @@ export class FirstLiveService {
 
     try {
       await executeRun(
-        `INSERT OR REPLACE INTO first_live_ledger (
-          id, correlation_id, idempotency_key, broker, environment, execution_mode,
-          symbol, side, quantity, requested_price, status, attempted_at, payload_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `UPDATE first_live_ledger SET status = ?, broker_order_id = ?, reconciled_at = ?, result_json = ? WHERE reservation_token = ? OR id = ?`,
         [
-          `fl-${now}-${Math.random().toString(36).slice(2, 7)}`,
-          details.correlationId,
-          details.idempotencyKey,
-          (details.orderRequest as any).broker || 'FIVE_PAISA',
-          'LIVE',
-          'FIRST_LIVE_CERTIFICATION',
-          details.orderRequest.symbol,
-          details.orderRequest.side,
-          details.orderRequest.quantity,
-          details.orderRequest.price || 0,
-          'ATTEMPTED',
+          status,
+          brokerOrderId || null,
           now,
-          JSON.stringify(details)
+          JSON.stringify({ error, result, finalizedAt: now }),
+          reservationToken,
+          reservationToken
         ]
       );
     } catch (err) {
-      console.warn('Failed to insert into first_live_ledger SQLite table:', err);
+      console.warn('Failed to update first_live_ledger SQLite table on finalization:', err);
     }
 
-    liveRuntimeLog('SYSTEM', 'FIRST_LIVE_LOCKED', {
-      correlationId: details.correlationId,
-      reason: details.reason,
-      ordersSubmitted: newCount,
-      revertedToMode: 'LIVE_DRY_RUN',
+    liveRuntimeLog('SYSTEM', 'FIRST_LIVE_FINALIZED', {
+      reservationToken,
+      status,
+      brokerOrderId,
+      error,
       timestamp: new Date(now).toISOString()
     });
+
+    tradeAuditLog('FIRST_LIVE_FINALIZED', {
+      broker: 'FIVE_PAISA',
+      environment: 'LIVE',
+      result: status === 'ACCEPTED' || status === 'FILLED' ? 'SUCCESS' : 'FAILURE',
+      details: { reservationToken, status, brokerOrderId, error }
+    });
+  }
+
+  /**
+   * Legacy method retained for backward compatibility.
+   */
+  async consumeAttemptAndLock(details: {
+    correlationId: string;
+    idempotencyKey: string;
+    orderRequest: OrderRequest;
+    reason: string;
+  }): Promise<void> {
+    const reservation = await this.reserveFirstLiveOrder({
+      correlationId: details.correlationId,
+      idempotencyKey: details.idempotencyKey,
+      orderRequest: details.orderRequest
+    });
+
+    if (reservation.reservationToken) {
+      await this.finalizeFirstLiveOrder({
+        reservationToken: reservation.reservationToken,
+        status: 'ATTEMPTED',
+        error: details.reason
+      });
+    }
   }
 }
 

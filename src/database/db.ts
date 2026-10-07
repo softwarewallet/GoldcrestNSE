@@ -23,10 +23,24 @@ let persistenceStatus: DatabasePersistenceStatus = {
   recoveredFromBackup: false
 };
 
+export function getDatabaseFilePaths(): {
+  primary: string;
+  temporary: string;
+  backup: string;
+} {
+  const envFile = process.env.GOLDCREST_DB_FILE;
+  const primary = envFile ? path.resolve(envFile) : path.join(process.cwd(), 'data', 'trading_analyst.sqlite');
+  return {
+    primary,
+    temporary: `${primary}.tmp`,
+    backup: `${primary}.bak`
+  };
+}
+
 export function recoverDatabaseFileIfNeeded(
-  primaryFile = DB_FILE,
-  backupFile = DB_BACKUP_FILE,
-  temporaryFile = DB_TEMP_FILE
+  primaryFile = getDatabaseFilePaths().primary,
+  backupFile = getDatabaseFilePaths().backup,
+  temporaryFile = getDatabaseFilePaths().temporary
 ): boolean {
   if (fs.existsSync(primaryFile)) return false;
   if (fs.existsSync(backupFile)) {
@@ -39,6 +53,7 @@ export function recoverDatabaseFileIfNeeded(
 }
 
 function loadDatabase(SQL: any): Database {
+  const { primary: DB_FILE, temporary: DB_TEMP_FILE, backup: DB_BACKUP_FILE } = getDatabaseFilePaths();
   recoverDatabaseFileIfNeeded();
   if (!fs.existsSync(DB_FILE) && fs.existsSync(DB_TEMP_FILE)) {
     try {
@@ -57,7 +72,7 @@ function loadDatabase(SQL: any): Database {
     return new SQL.Database(fs.readFileSync(DB_FILE));
   } catch (primaryError) {
     if (!fs.existsSync(DB_BACKUP_FILE)) throw primaryError;
-    const corruptFile = path.join(DB_DIR, `trading_analyst.sqlite.corrupt-${Date.now()}`);
+    const corruptFile = path.join(path.dirname(DB_FILE), `${path.basename(DB_FILE)}.corrupt-${Date.now()}`);
     try {
       fs.renameSync(DB_FILE, corruptFile);
     } catch {
@@ -71,8 +86,10 @@ function loadDatabase(SQL: any): Database {
 }
 
 async function initializeDatabase(): Promise<Database> {
-  if (!fs.existsSync(DB_DIR)) {
-    fs.mkdirSync(DB_DIR, { recursive: true });
+  const { primary: DB_FILE } = getDatabaseFilePaths();
+  const dbDir = path.dirname(DB_FILE);
+  if (!fs.existsSync(dbDir)) {
+    fs.mkdirSync(dbDir, { recursive: true });
   }
 
   const SQL = await initSqlJs();
@@ -97,6 +114,16 @@ export async function getDatabase(): Promise<Database> {
   return dbInitializationPromise;
 }
 
+export function resetDatabaseInstanceForTesting(): void {
+  if (dbInstance) {
+    try {
+      dbInstance.close();
+    } catch {}
+    dbInstance = null;
+  }
+  dbInitializationPromise = null;
+}
+
 export function getDatabaseInitializationState(): {
   initialized: boolean;
   initializing: boolean;
@@ -109,9 +136,9 @@ export function getDatabaseInitializationState(): {
 
 export function persistDatabaseBuffer(
   buffer: Buffer,
-  primaryFile = DB_FILE,
-  temporaryFile = DB_TEMP_FILE,
-  backupFile = DB_BACKUP_FILE
+  primaryFile = getDatabaseFilePaths().primary,
+  temporaryFile = getDatabaseFilePaths().temporary,
+  backupFile = getDatabaseFilePaths().backup
 ): void {
   const directory = path.dirname(primaryFile);
   if (!fs.existsSync(directory)) fs.mkdirSync(directory, { recursive: true });
@@ -139,11 +166,12 @@ export function persistDatabase(): void {
     // Write a complete new image first. The previous primary is retained as a
     // recovery snapshot so a process crash or filesystem failure cannot leave
     // the only durable database image unreadable.
+    const { primary, temporary, backup } = getDatabaseFilePaths();
     persistDatabaseBuffer(
       Buffer.from(dbInstance.export()),
-      DB_FILE,
-      DB_TEMP_FILE,
-      DB_BACKUP_FILE
+      primary,
+      temporary,
+      backup
     );
     persistenceStatus.lastPersistedAt = Date.now();
     persistenceStatus.lastPersistenceError = null;
@@ -156,18 +184,6 @@ export function persistDatabase(): void {
       // Best effort cleanup only.
     }
   }
-}
-
-export function getDatabaseFilePaths(): {
-  primary: string;
-  temporary: string;
-  backup: string;
-} {
-  return {
-    primary: DB_FILE,
-    temporary: DB_TEMP_FILE,
-    backup: DB_BACKUP_FILE
-  };
 }
 
 export function getDatabasePersistenceStatus(): DatabasePersistenceStatus {
@@ -511,6 +527,7 @@ function initSchema(db: Database) {
     -- 29. First-Live Certification Ledger
     CREATE TABLE IF NOT EXISTS first_live_ledger (
       id TEXT PRIMARY KEY,
+      reservation_token TEXT,
       correlation_id TEXT NOT NULL,
       idempotency_key TEXT NOT NULL,
       broker TEXT NOT NULL,
@@ -751,7 +768,8 @@ function initSchema(db: Database) {
     'ALTER TABLE live_trade_research ADD COLUMN mae_pnl REAL;',
     'ALTER TABLE live_trade_research ADD COLUMN max_favorable_price REAL;',
     'ALTER TABLE live_trade_research ADD COLUMN max_adverse_price REAL;',
-    'ALTER TABLE live_trade_research ADD COLUMN holding_duration_ms INTEGER;'
+    'ALTER TABLE live_trade_research ADD COLUMN holding_duration_ms INTEGER;',
+    'ALTER TABLE first_live_ledger ADD COLUMN reservation_token TEXT;'
   ];
   try {
     db.run('ALTER TABLE execution_intents ADD COLUMN claim_token TEXT;');
