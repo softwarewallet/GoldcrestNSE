@@ -1151,21 +1151,85 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
 
     if (reservationToken) {
       const rows = await executeQuery<any>(
-        'SELECT * FROM first_live_ledger WHERE (id = ? OR reservation_token = ?) AND status = ? LIMIT 1',
-        [reservationToken, reservationToken, 'RESERVED']
+        'SELECT * FROM first_live_ledger WHERE id = ? OR reservation_token = ? LIMIT 1',
+        [reservationToken, reservationToken]
       );
 
       const reservation = rows[0];
-      if (reservation) {
-        isAuthorizedFirstLive = true;
-      } else {
+      if (!reservation) {
         throw new BrokerError(
           'FIRST_LIVE_ORDER_NOT_AUTHORIZED',
-          `FIRST_LIVE_ORDER_NOT_AUTHORIZED: Reservation token '${reservationToken}' is invalid or not in RESERVED status.`,
+          `FIRST_LIVE_ORDER_NOT_AUTHORIZED: Reservation token '${reservationToken}' is invalid.`,
           'FIVE_PAISA',
           this.environment
         );
       }
+
+      if (reservation.status !== 'RESERVED') {
+        throw new BrokerError(
+          'FIRST_LIVE_ORDER_NOT_AUTHORIZED',
+          `FIRST_LIVE_ORDER_NOT_AUTHORIZED: Reservation token '${reservationToken}' has already been finalized/consumed (Status: ${reservation.status}).`,
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+
+      if (reservation.broker !== 'FIVE_PAISA') {
+        throw new BrokerError(
+          'FIRST_LIVE_ORDER_NOT_AUTHORIZED',
+          `FIRST_LIVE_ORDER_NOT_AUTHORIZED: Reservation broker mismatch (Expected: FIVE_PAISA, Reservation: ${reservation.broker}).`,
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+
+      if (reservation.environment !== 'LIVE') {
+        throw new BrokerError(
+          'FIRST_LIVE_ORDER_NOT_AUTHORIZED',
+          `FIRST_LIVE_ORDER_NOT_AUTHORIZED: Reservation environment mismatch (Expected: LIVE, Reservation: ${reservation.environment}).`,
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+
+      if (reservation.symbol !== order.symbol) {
+        throw new BrokerError(
+          'FIRST_LIVE_ORDER_NOT_AUTHORIZED',
+          `FIRST_LIVE_ORDER_NOT_AUTHORIZED: Reservation symbol mismatch (Expected: ${reservation.symbol}, Order: ${order.symbol}).`,
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+
+      if (reservation.side !== order.side) {
+        throw new BrokerError(
+          'FIRST_LIVE_ORDER_NOT_AUTHORIZED',
+          `FIRST_LIVE_ORDER_NOT_AUTHORIZED: Reservation side mismatch (Expected: ${reservation.side}, Order: ${order.side}).`,
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+
+      if (Number(reservation.quantity) !== Number(order.quantity)) {
+        throw new BrokerError(
+          'FIRST_LIVE_ORDER_NOT_AUTHORIZED',
+          `FIRST_LIVE_ORDER_NOT_AUTHORIZED: Reservation quantity mismatch (Expected: ${reservation.quantity}, Order: ${order.quantity}).`,
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+
+      const reqIdempotencyKey = order._firstLiveIdempotencyKey || '';
+      if (reservation.idempotency_key !== reqIdempotencyKey) {
+        throw new BrokerError(
+          'FIRST_LIVE_ORDER_NOT_AUTHORIZED',
+          `FIRST_LIVE_ORDER_NOT_AUTHORIZED: Reservation idempotency key mismatch (Expected: ${reservation.idempotency_key}, Order: ${reqIdempotencyKey}).`,
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+
+      isAuthorizedFirstLive = true;
     }
 
     if (executionMode === 'FIRST_LIVE_CERTIFICATION' && !isAuthorizedFirstLive) {

@@ -168,6 +168,8 @@ export interface OrderRequest {
   comment?: string;
   /** Internal server-generated First-Live reservation token */
   firstLiveReservationToken?: string;
+  /** Internal server-generated First-Live idempotency key binding */
+  _firstLiveIdempotencyKey?: string;
 }
 
 export interface OrderModification {

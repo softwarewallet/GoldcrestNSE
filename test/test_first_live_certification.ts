@@ -1,22 +1,26 @@
+import crypto from 'crypto';
 import { firstLiveService } from '../src/services/firstLiveService';
 import { getSystemConfig, updateSystemConfig } from '../src/services/configService';
 import { killSwitch } from '../src/brokers/safety/KillSwitch';
 import { FivePaisaLiveAdapter } from '../src/brokers/adapters/fivepaisa/FivePaisaLiveAdapter';
 import { FivePaisaBrokerAdapter } from '../src/brokers/adapters/fivepaisa/FivePaisaBrokerAdapter';
 import { liveTradingGate } from '../src/brokers/safety/LiveTradingGate';
-import { executeRun, executeQuery, resetDatabaseInstanceForTesting, getDatabaseFilePaths } from '../src/database/db';
+import { executeRun, executeQuery, resetDatabaseInstanceForTesting } from '../src/database/db';
 import fs from 'fs';
 import path from 'path';
 
 // Force isolation to test database
-process.env.GOLDCREST_DB_FILE = 'data/test_first_live_certification.sqlite';
+const TEST_DB_PATH = 'data/test_first_live_certification.sqlite';
+process.env.GOLDCREST_DB_FILE = TEST_DB_PATH;
 resetDatabaseInstanceForTesting();
 
-// Global fetch mock to simulate 5paisa live broker responses
+// Global fetch mock to simulate 5paisa live broker responses and track calls
 const originalFetch = global.fetch;
+let fetchCallsCount = 0;
 let mockFetchHandler: ((url: string, init?: any) => any) | null = null;
 
 global.fetch = function (url: any, init: any) {
+  fetchCallsCount++;
   if (mockFetchHandler) {
     try {
       return mockFetchHandler(String(url), init);
@@ -27,17 +31,29 @@ global.fetch = function (url: any, init: any) {
   return Promise.resolve(new Response(JSON.stringify({})));
 } as any;
 
+function calculateFileHash(filePath: string): string | null {
+  if (!fs.existsSync(filePath)) return null;
+  const fileBuffer = fs.readFileSync(filePath);
+  const hashSum = crypto.createHash('sha256');
+  hashSum.update(fileBuffer);
+  return hashSum.digest('hex');
+}
+
 async function runFirstLiveCertificationTests() {
   console.log('================================================================');
   console.log('   STARTING GOLDCREST NSE CONTROLLED FIRST LIVE CERTIFICATION TESTS');
   console.log('================================================================');
 
-  // Verify production database is untouched
+  // Locate and hash production database files before running tests
   const prodDbFile = path.join(process.cwd(), 'data', 'trading_analyst.sqlite');
-  let originalProdSize = 0;
-  if (fs.existsSync(prodDbFile)) {
-    originalProdSize = fs.statSync(prodDbFile).size;
-  }
+  const prodTmpFile = `${prodDbFile}.tmp`;
+  const prodBakFile = `${prodDbFile}.bak`;
+
+  const preProdHash = calculateFileHash(prodDbFile);
+  const preTmpHash = calculateFileHash(prodTmpFile);
+  const preBakHash = calculateFileHash(prodBakFile);
+
+  console.log('[Database Isolation] Production DB Hash:', preProdHash || 'Not Exist');
 
   // Setup test environment
   try {
@@ -125,6 +141,7 @@ async function runFirstLiveCertificationTests() {
   };
   (adapter as any).status = 'CONNECTED';
 
+  fetchCallsCount = 0;
   let directBypassCaught = false;
   try {
     await adapter.placeOrder({
@@ -144,7 +161,10 @@ async function runFirstLiveCertificationTests() {
   if (!directBypassCaught) {
     throw new Error('FAILED: Direct placeOrder call WITHOUT reservation was not blocked by secondary interlock!');
   }
-  console.log('  ✓ [D] Direct placeOrder call without reservation successfully blocked with FIRST_LIVE_ORDER_NOT_AUTHORIZED.');
+  if (fetchCallsCount > 0) {
+    throw new Error(`FAILED: Secondary interlock made broker network calls on authorization failure! Count: ${fetchCallsCount}`);
+  }
+  console.log('  ✓ [D] Direct placeOrder call without reservation successfully blocked with 0 broker calls.');
 
   // ----------------------------------------------------------------
   // E & F. First-Live Reservation & Concurrent Safety
@@ -161,7 +181,12 @@ async function runFirstLiveCertificationTests() {
   if (!reservation1.success || !reservation1.reservationToken) {
     throw new Error(`FAILED: Legitimate reservation failed: ${reservation1.message}`);
   }
-  console.log('  ✓ [E] First-Live reservation succeeded once.');
+  
+  // Assert reservation token is cryptographic secure (long string)
+  if (reservation1.reservationToken.length < 50 || !reservation1.reservationToken.startsWith('fl-res-')) {
+    throw new Error(`FAILED: Reservation token is not cryptographically secure: ${reservation1.reservationToken}`);
+  }
+  console.log('  ✓ [E] First-Live reservation succeeded once with cryptographic token.');
 
   // F. Second concurrent reservation fails
   const reservation2 = await firstLiveService.reserveFirstLiveOrder({
@@ -174,6 +199,129 @@ async function runFirstLiveCertificationTests() {
     throw new Error('FAILED: Second concurrent reservation succeeded! Concurrency leak detected.');
   }
   console.log('  ✓ [F] Second concurrent reservation rejected successfully (atomic reservation lock).');
+
+  // ----------------------------------------------------------------
+  // Direct Adapter Safety & Mismatch Regression Tests (Sections 4 & 12)
+  // ----------------------------------------------------------------
+  console.log('\n[Mismatch Regression Tests] Verifying Strong Binding & Zero Broker Calls...');
+
+  // TEST 1 — Wrong Symbol
+  fetchCallsCount = 0;
+  let test1Caught = false;
+  try {
+    await adapter.placeOrder({
+      market: 'INDIAN_OPTIONS',
+      symbol: 'NIFTY26OCT23600CE', // Reservation symbol was NIFTY26OCT23500CE
+      side: 'BUY',
+      orderType: 'LIMIT',
+      quantity: 25,
+      price: 50,
+      firstLiveReservationToken: reservation1.reservationToken,
+      _firstLiveIdempotencyKey: 'test-idem-success'
+    } as any);
+  } catch (err: any) {
+    if (err.message.includes('FIRST_LIVE_ORDER_NOT_AUTHORIZED') && err.message.includes('symbol mismatch')) {
+      test1Caught = true;
+    } else {
+      console.warn('Test 1 caught unexpected error:', err.message);
+    }
+  }
+  if (!test1Caught) throw new Error('FAILED TEST 1: Allowed placeOrder with wrong symbol!');
+  if (fetchCallsCount > 0) throw new Error('FAILED TEST 1: Network call made on symbol mismatch!');
+  console.log('  ✓ TEST 1: Wrong Symbol blocked cleanly with 0 broker calls.');
+
+  // TEST 2 — Wrong Side
+  fetchCallsCount = 0;
+  let test2Caught = false;
+  try {
+    await adapter.placeOrder({
+      market: 'INDIAN_OPTIONS',
+      symbol: 'NIFTY26OCT23500CE',
+      side: 'SELL', // Reservation side was BUY
+      orderType: 'LIMIT',
+      quantity: 25,
+      price: 50,
+      firstLiveReservationToken: reservation1.reservationToken,
+      _firstLiveIdempotencyKey: 'test-idem-success'
+    } as any);
+  } catch (err: any) {
+    if (err.message.includes('FIRST_LIVE_ORDER_NOT_AUTHORIZED') && err.message.includes('side mismatch')) {
+      test2Caught = true;
+    }
+  }
+  if (!test2Caught) throw new Error('FAILED TEST 2: Allowed placeOrder with wrong side!');
+  if (fetchCallsCount > 0) throw new Error('FAILED TEST 2: Network call made on side mismatch!');
+  console.log('  ✓ TEST 2: Wrong Side blocked cleanly with 0 broker calls.');
+
+  // TEST 3 — Wrong Quantity
+  fetchCallsCount = 0;
+  let test3Caught = false;
+  try {
+    await adapter.placeOrder({
+      market: 'INDIAN_OPTIONS',
+      symbol: 'NIFTY26OCT23500CE',
+      side: 'BUY',
+      orderType: 'LIMIT',
+      quantity: 50, // Reservation quantity was 25
+      price: 50,
+      firstLiveReservationToken: reservation1.reservationToken,
+      _firstLiveIdempotencyKey: 'test-idem-success'
+    } as any);
+  } catch (err: any) {
+    if (err.message.includes('FIRST_LIVE_ORDER_NOT_AUTHORIZED') && err.message.includes('quantity mismatch')) {
+      test3Caught = true;
+    }
+  }
+  if (!test3Caught) throw new Error('FAILED TEST 3: Allowed placeOrder with wrong quantity!');
+  if (fetchCallsCount > 0) throw new Error('FAILED TEST 3: Network call made on quantity mismatch!');
+  console.log('  ✓ TEST 3: Wrong Quantity blocked cleanly with 0 broker calls.');
+
+  // TEST 4 — Wrong Idempotency Key
+  fetchCallsCount = 0;
+  let test4Caught = false;
+  try {
+    await adapter.placeOrder({
+      market: 'INDIAN_OPTIONS',
+      symbol: 'NIFTY26OCT23500CE',
+      side: 'BUY',
+      orderType: 'LIMIT',
+      quantity: 25,
+      price: 50,
+      firstLiveReservationToken: reservation1.reservationToken,
+      _firstLiveIdempotencyKey: 'test-idem-different' // Reservation key was test-idem-success
+    } as any);
+  } catch (err: any) {
+    if (err.message.includes('FIRST_LIVE_ORDER_NOT_AUTHORIZED') && err.message.includes('idempotency key mismatch')) {
+      test4Caught = true;
+    }
+  }
+  if (!test4Caught) throw new Error('FAILED TEST 4: Allowed placeOrder with wrong idempotency key!');
+  if (fetchCallsCount > 0) throw new Error('FAILED TEST 4: Network call made on idempotency mismatch!');
+  console.log('  ✓ TEST 4: Wrong Idempotency Key blocked cleanly with 0 broker calls.');
+
+  // TEST 5 — Invalid/Tampered Token
+  fetchCallsCount = 0;
+  let test5Caught = false;
+  const tamperedToken = reservation1.reservationToken.slice(0, -3) + 'XYZ';
+  try {
+    await adapter.placeOrder({
+      market: 'INDIAN_OPTIONS',
+      symbol: 'NIFTY26OCT23500CE',
+      side: 'BUY',
+      orderType: 'LIMIT',
+      quantity: 25,
+      price: 50,
+      firstLiveReservationToken: tamperedToken,
+      _firstLiveIdempotencyKey: 'test-idem-success'
+    } as any);
+  } catch (err: any) {
+    if (err.message.includes('FIRST_LIVE_ORDER_NOT_AUTHORIZED') && err.message.includes('invalid')) {
+      test5Caught = true;
+    }
+  }
+  if (!test5Caught) throw new Error('FAILED TEST 5: Allowed placeOrder with tampered token!');
+  if (fetchCallsCount > 0) throw new Error('FAILED TEST 5: Network call made on tampered token!');
+  console.log('  ✓ TEST 5: Invalid/Tampered Token blocked cleanly with 0 broker calls.');
 
   // ----------------------------------------------------------------
   // G. Reserved order passes adapter interlock
@@ -193,12 +341,17 @@ async function runFirstLiveCertificationTests() {
 
   const allowedOrder = {
     ...validOrderRequest,
-    firstLiveReservationToken: reservation1.reservationToken
+    firstLiveReservationToken: reservation1.reservationToken,
+    _firstLiveIdempotencyKey: 'test-idem-success'
   };
 
+  fetchCallsCount = 0;
   const placedOrder = await adapter.placeOrder(allowedOrder);
   if (!placedOrder || placedOrder.status !== 'ACCEPTED') {
     throw new Error(`FAILED: Legitimate reserved order failed to pass the adapter interlock! Status: ${placedOrder?.status}`);
+  }
+  if (fetchCallsCount === 0) {
+    throw new Error('FAILED: Broker network call was not made for valid reservation!');
   }
   console.log('  ✓ [G] Legitimate reserved order with valid token successfully passed adapter interlock.');
 
@@ -208,6 +361,21 @@ async function runFirstLiveCertificationTests() {
     status: 'FILLED',
     brokerOrderId: placedOrder.brokerOrderId
   });
+
+  // TEST 6 — Reused Finalized Token (Section 3 & 4)
+  console.log('\n[Test Replay] Testing Reused Finalized Token rejection...');
+  fetchCallsCount = 0;
+  let test6Caught = false;
+  try {
+    await adapter.placeOrder(allowedOrder); // Same correct order payload and token, but reservation is now finalized/FILLED
+  } catch (err: any) {
+    if (err.message.includes('FIRST_LIVE_ORDER_NOT_AUTHORIZED') && err.message.includes('finalized/consumed')) {
+      test6Caught = true;
+    }
+  }
+  if (!test6Caught) throw new Error('FAILED TEST 6: Allowed reuse of finalized token!');
+  if (fetchCallsCount > 0) throw new Error('FAILED TEST 6: Network call made during finalized token reuse!');
+  console.log('  ✓ TEST 6: Reused Finalized Token rejected cleanly with 0 broker calls before network dispatch.');
 
   // ----------------------------------------------------------------
   // H & I. Broker Failure / Timeout Consumes Allowance
@@ -242,7 +410,8 @@ async function runFirstLiveCertificationTests() {
   try {
     await adapter.placeOrder({
       ...validOrderRequest,
-      firstLiveReservationToken: reservationFail.reservationToken
+      firstLiveReservationToken: reservationFail.reservationToken,
+      _firstLiveIdempotencyKey: 'test-idem-fail'
     });
   } catch (err) {
     submissionErrorCaught = true;
@@ -303,14 +472,35 @@ async function runFirstLiveCertificationTests() {
   // ----------------------------------------------------------------
   // M. Production database remains untouched
   // ----------------------------------------------------------------
-  console.log('\n[M] Verifying Production Database Is Completely Untouched...');
-  if (fs.existsSync(prodDbFile)) {
-    const finalProdSize = fs.statSync(prodDbFile).size;
-    if (finalProdSize !== originalProdSize) {
-      throw new Error(`FAILED: Production database file size changed during certification tests! Previous: ${originalProdSize}, New: ${finalProdSize}`);
-    }
+  console.log('\n[M] Verifying Production Database Is Completely Untouched via SHA-256...');
+
+  const postProdHash = calculateFileHash(prodDbFile);
+  const postTmpHash = calculateFileHash(prodTmpFile);
+  const postBakHash = calculateFileHash(prodBakFile);
+
+  if (preProdHash !== postProdHash) {
+    throw new Error(`FAILED: Production database file 'data/trading_analyst.sqlite' was modified during testing! Pre-hash: ${preProdHash}, Post-hash: ${postProdHash}`);
   }
-  console.log('  ✓ [M] Production database remained pristine and completely untouched.');
+  if (preTmpHash !== postTmpHash) {
+    throw new Error(`FAILED: Production tmp database file 'data/trading_analyst.sqlite.tmp' was modified during testing! Pre-hash: ${preTmpHash}, Post-hash: ${postTmpHash}`);
+  }
+  if (preBakHash !== postBakHash) {
+    throw new Error(`FAILED: Production bak database file 'data/trading_analyst.sqlite.bak' was modified during testing! Pre-hash: ${preBakHash}, Post-hash: ${postBakHash}`);
+  }
+
+  console.log('  ✓ [M] Production database hashes matched perfectly. No production files were created, modified or touched.');
+
+  // Clean up isolated test DB files (Section 13)
+  console.log('\n[Cleanup] Cleaning up isolated test database files...');
+  try {
+    resetDatabaseInstanceForTesting();
+    if (fs.existsSync(TEST_DB_PATH)) fs.unlinkSync(TEST_DB_PATH);
+    if (fs.existsSync(`${TEST_DB_PATH}.tmp`)) fs.unlinkSync(`${TEST_DB_PATH}.tmp`);
+    if (fs.existsSync(`${TEST_DB_PATH}.bak`)) fs.unlinkSync(`${TEST_DB_PATH}.bak`);
+    console.log('  ✓ Test database files unlinked.');
+  } catch (cleanupErr) {
+    console.warn('  ⚠ Non-fatal test DB file cleanup warning:', cleanupErr);
+  }
 
   // Reset global fetch to normal
   global.fetch = originalFetch;

@@ -4,10 +4,8 @@ import path from 'path';
 
 let dbInstance: Database | null = null;
 let dbInitializationPromise: Promise<Database> | null = null;
-const DB_DIR = path.join(process.cwd(), 'data');
-const DB_FILE = path.join(DB_DIR, 'trading_analyst.sqlite');
-const DB_TEMP_FILE = path.join(DB_DIR, 'trading_analyst.sqlite.tmp');
-const DB_BACKUP_FILE = path.join(DB_DIR, 'trading_analyst.sqlite.bak');
+
+// All database paths are dynamically resolved via getDatabaseFilePaths()
 
 export type DatabasePersistenceStatus = {
   lastPersistedAt: number | null;
@@ -162,11 +160,11 @@ export function persistDatabaseBuffer(
 
 export function persistDatabase(): void {
   if (!dbInstance) return;
+  const { primary, temporary, backup } = getDatabaseFilePaths();
   try {
     // Write a complete new image first. The previous primary is retained as a
     // recovery snapshot so a process crash or filesystem failure cannot leave
     // the only durable database image unreadable.
-    const { primary, temporary, backup } = getDatabaseFilePaths();
     persistDatabaseBuffer(
       Buffer.from(dbInstance.export()),
       primary,
@@ -179,7 +177,7 @@ export function persistDatabase(): void {
     persistenceStatus.lastPersistenceError = err?.message || String(err);
     console.error('Error persisting SQLite database to disk:', err);
     try {
-      if (fs.existsSync(DB_TEMP_FILE)) fs.unlinkSync(DB_TEMP_FILE);
+      if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
     } catch {
       // Best effort cleanup only.
     }

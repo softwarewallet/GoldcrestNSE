@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { getSystemConfig, updateSystemConfig } from './configService';
 import { executeQuery, executeRun, executeTransaction } from '../database/db';
 import { liveRuntimeLog, tradeAuditLog } from './liveRuntimeLog';
@@ -258,8 +259,7 @@ export class FirstLiveService {
       }
 
       const now = Date.now();
-      const randomSeed = Math.random().toString(36).substring(2, 12) + Math.random().toString(36).substring(2, 12);
-      const reservationToken = `fl-res-${now}-${randomSeed}`;
+      const reservationToken = `fl-res-${crypto.randomBytes(32).toString('hex')}`;
 
       const newCount = Math.max(1, (config.firstLiveOrdersSubmitted || 0) + 1);
       updateSystemConfig({
