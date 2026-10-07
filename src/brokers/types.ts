@@ -43,6 +43,7 @@ export type BrokerErrorCode =
   | 'INVALID_PRICE'
   | 'INVALID_STOP'
   | 'NOT_SUPPORTED'
+  | 'LIVE_ORDER_BLOCKED_BY_DRY_RUN'
   | 'UNKNOWN_ERROR';
 
 export type OrderType = 'MARKET' | 'LIMIT' | 'STOP' | 'STOP_LIMIT';

@@ -30,6 +30,7 @@ export function evaluateSystemConfigIntegrity(config: SystemConfig): ConfigInteg
   check('tradingMode', config.tradingMode === 'LIVE_ONLY');
   check('cTraderApiMode', config.cTraderApiMode === 'LIVE' || config.cTraderApiMode === 'DEMO');
   check('liveTradingEnabledType', typeof config.liveTradingEnabled === 'boolean');
+  check('executionMode', config.executionMode === 'LIVE_DRY_RUN' || config.executionMode === 'LIVE_EXECUTION');
   check('defaultRiskPct', positiveFinite(config.defaultRiskPct) && config.defaultRiskPct <= 100);
   check('maxDailyLossPct', positiveFinite(config.maxDailyLossPct) && config.maxDailyLossPct <= 100);
   check('maxOpenPositions', positiveInteger(config.maxOpenPositions));

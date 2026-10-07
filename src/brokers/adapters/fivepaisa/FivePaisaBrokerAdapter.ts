@@ -1065,6 +1065,17 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
   }
 
   async placeOrder(order: OrderRequest): Promise<NormalizedOrder> {
+    const systemConfig = getSystemConfig();
+    const executionMode = systemConfig.executionMode || 'LIVE_DRY_RUN';
+    if (executionMode === 'LIVE_DRY_RUN') {
+      throw new BrokerError(
+        'LIVE_ORDER_BLOCKED_BY_DRY_RUN',
+        'LIVE_ORDER_BLOCKED_BY_DRY_RUN: Order placement is blocked because GoldcrestNSE is running in LIVE_DRY_RUN mode. No real broker orders are transmitted.',
+        'FIVE_PAISA',
+        this.environment
+      );
+    }
+
     await this.ensureActiveSession();
 
     if (!this.isLive) {

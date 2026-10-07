@@ -39,7 +39,18 @@ export async function reconcileExecutionIntent(idempotencyKey: string): Promise<
   const broker = String(row.broker) as BrokerType;
   if (broker !== 'CTRADER' && broker !== 'FIVE_PAISA') return null;
 
-  const adapter = brokerRegistry.getAdapter(broker, 'LIVE');
+  let adapter;
+  try {
+    adapter = brokerRegistry.getAdapter(broker, 'LIVE');
+  } catch (err: any) {
+    await failExecutionIntent(idempotencyKey, {
+      ...stored,
+      reconciliationState: 'FAILED',
+      reconciliationErrorCode: 'ADAPTER_NOT_REGISTERED',
+      reason: err?.message || `Broker ${broker} has no live adapter registered.`
+    });
+    return null;
+  }
   let brokerOrderId = brokerOrderIdFromResult(stored);
 
   // An ambiguous submission can lose the broker response before an order ID

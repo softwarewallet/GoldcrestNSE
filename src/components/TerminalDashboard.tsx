@@ -208,13 +208,13 @@ export const TerminalDashboard: React.FC<TerminalDashboardProps> = ({
     <div className="w-full min-h-[calc(100vh-162px)] bg-[#020914] text-slate-100 p-3 md:p-4 space-y-3">
       {isEmergencyHalted && <div className="rounded-lg border border-rose-700 bg-rose-950/80 px-4 py-2 text-xs font-mono text-rose-200">TRADING HALTED — emergency stop is active; new orders are blocked.</div>}
 
-      <section className="grid grid-cols-2 xl:grid-cols-6 gap-3">
-        <Kpi label="Live P&L" value={dailyPnl == null ? '—' : money(dailyPnl, nseAccount?.currency || currency)} sub="Broker-reported realized P&L" tone={pnlClass(dailyPnl)} />
-        <Kpi label="Win Rate" value="—" sub="Only calculated from closed trade ledger" />
-        <Kpi label="Total Trades" value={nseBrokerSummary ? String(nseBrokerSummary.orderHistory.length) : '—'} sub="Live broker order history" />
-        <Kpi label="Profit Factor" value="—" sub="Requires realized trade P&L" />
-        <Kpi label="Max Drawdown" value="—" sub="Requires equity history" tone="text-rose-400" />
-        <Kpi label="Account Balance" value={money(accountBalance, nseAccount?.currency || currency)} sub={`Available: ${nseAccount ? money(freeMargin, nseAccount.currency) : '—'}`} />
+      <section className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
+        <Kpi label="Live P&L" value={dailyPnl == null ? '—' : money(dailyPnl, nseAccount?.currency || currency)} sub="Broker realized P&L" tone={pnlClass(dailyPnl)} />
+        <Kpi label="Win Rate" value="—" sub="Closed trade ledger" />
+        <Kpi label="Total Trades" value={nseBrokerSummary ? String(nseBrokerSummary.orderHistory.length) : '—'} sub="Live broker history" />
+        <Kpi label="Profit Factor" value="—" sub="Realized P&L required" />
+        <Kpi label="Max Drawdown" value="—" sub="Equity history required" tone="text-rose-400" />
+        <Kpi label="Account Balance" value={money(accountBalance, nseAccount?.currency || currency)} sub={`Avail: ${nseAccount ? money(freeMargin, nseAccount.currency) : '—'}`} />
       </section>
 
       <section className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_340px] gap-3">
@@ -305,10 +305,10 @@ export const TerminalDashboard: React.FC<TerminalDashboardProps> = ({
 };
 
 const Kpi: React.FC<{ label: string; value: string; sub: string; tone?: string }> = ({ label, value, sub, tone = 'text-white' }) => (
-  <div className="rounded-xl border border-slate-800 bg-[#04121f] px-4 py-3 min-h-[88px]">
-    <div className="text-[11px] text-slate-400">{label}</div>
-    <div className={`text-xl font-semibold mt-1 ${tone}`}>{value}</div>
-    <div className="text-[10px] text-slate-600 mt-1 truncate">{sub}</div>
+  <div className="rounded-xl border border-slate-800 bg-[#04121f] px-3 py-2 min-h-[68px]">
+    <div className="text-[10px] text-slate-400 truncate">{label}</div>
+    <div className={`text-base font-semibold mt-0.5 truncate ${tone}`}>{value}</div>
+    <div className="text-[9px] text-slate-500 mt-0.5 truncate">{sub}</div>
   </div>
 );
 

@@ -67,6 +67,18 @@ export function getNiftyIndexLotSize(symbolOrUnderlying: string): number {
 }
 
 /**
+ * Strict authoritative lot size resolution for live execution.
+ * Rejects with AUTHORITATIVE_LOT_SIZE_UNAVAILABLE if live contract metadata lot size is missing or invalid.
+ */
+export function getAuthoritativeLotSizeOrReject(contract: { lotSize?: number; symbol?: string; underlying?: string } | null | undefined): number {
+  const lotSize = Number(contract?.lotSize);
+  if (!Number.isFinite(lotSize) || lotSize <= 0) {
+    throw new Error('AUTHORITATIVE_LOT_SIZE_UNAVAILABLE: Live option contract metadata does not provide a valid authoritative lot size.');
+  }
+  return lotSize;
+}
+
+/**
  * Resolves the authoritative Maximum Trade Value (INR) configured in settings for a specific Nifty instrument.
  */
 export function getResolvedMaxTradeValueForNifty(

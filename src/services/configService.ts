@@ -5,6 +5,7 @@ import { evaluateSystemConfigIntegrity } from './configIntegrityService';
 export interface SystemConfig {
   tradingMode: 'LIVE_ONLY';
   liveTradingEnabled: boolean;
+  executionMode: 'LIVE_DRY_RUN' | 'LIVE_EXECUTION';
   dataStatus: 'LIVE' | 'DELAYED' | 'STALE' | 'UNAVAILABLE';
   modelStatus: string;
   researchStatus: 'CLOSED';
@@ -77,12 +78,14 @@ const PERSISTED_KEYS: readonly (keyof SystemConfig)[] = [
   'forexTakeProfitPips',
   'autoLiveForexPairs',
   'autoLiveIndianUnderlyings',
-  'financialDisclaimer'
+  'financialDisclaimer',
+  'executionMode'
 ];
 
 let activeConfig: SystemConfig = {
   tradingMode: 'LIVE_ONLY',
   liveTradingEnabled: process.env.LIVE_TRADING_ENABLED === 'true',
+  executionMode: 'LIVE_DRY_RUN',
   dataStatus: 'UNAVAILABLE',
   modelStatus: 'ML BASELINE / UNCALIBRATED (PHASE 1)',
   researchStatus: 'CLOSED',
