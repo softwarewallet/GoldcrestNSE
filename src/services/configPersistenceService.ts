@@ -23,7 +23,13 @@ type PersistedConfigKey =
   | 'forexTakeProfitPips'
   | 'autoLiveForexPairs'
   | 'autoLiveIndianUnderlyings'
-  | 'financialDisclaimer';
+  | 'financialDisclaimer'
+  | 'executionMode'
+  | 'firstLiveArmed'
+  | 'firstLiveOrdersAllowed'
+  | 'firstLiveOrdersSubmitted'
+  | 'firstLiveLocked'
+  | 'firstLiveArmedAt';
 
 const SYSTEM_SETTING_MAP: ReadonlyArray<[string, PersistedConfigKey]> = [
   ['CTRADER_API_MODE', 'cTraderApiMode'],
@@ -47,7 +53,13 @@ const SYSTEM_SETTING_MAP: ReadonlyArray<[string, PersistedConfigKey]> = [
   ['FOREX_TAKE_PROFIT_PIPS', 'forexTakeProfitPips'],
   ['AUTO_LIVE_FOREX_PAIRS', 'autoLiveForexPairs'],
   ['AUTO_LIVE_INDIAN_UNDERLYINGS', 'autoLiveIndianUnderlyings'],
-  ['FINANCIAL_DISCLAIMER', 'financialDisclaimer']
+  ['FINANCIAL_DISCLAIMER', 'financialDisclaimer'],
+  ['EXECUTION_MODE', 'executionMode'],
+  ['FIRST_LIVE_ARMED', 'firstLiveArmed'],
+  ['FIRST_LIVE_ORDERS_ALLOWED', 'firstLiveOrdersAllowed'],
+  ['FIRST_LIVE_ORDERS_SUBMITTED', 'firstLiveOrdersSubmitted'],
+  ['FIRST_LIVE_LOCKED', 'firstLiveLocked'],
+  ['FIRST_LIVE_ARMED_AT', 'firstLiveArmedAt']
 ];
 
 const NUMERIC_KEYS = new Set<PersistedConfigKey>([
@@ -65,7 +77,14 @@ const NUMERIC_KEYS = new Set<PersistedConfigKey>([
   'autoLiveMinSignalScore',
   'autoLiveMaxTradesPerPair',
   'forexStopLossPips',
-  'forexTakeProfitPips'
+  'forexTakeProfitPips',
+  'firstLiveOrdersAllowed',
+  'firstLiveOrdersSubmitted'
+]);
+
+const BOOLEAN_KEYS = new Set<PersistedConfigKey>([
+  'firstLiveArmed',
+  'firstLiveLocked'
 ]);
 
 const ARRAY_KEYS = new Set<PersistedConfigKey>([
@@ -114,6 +133,16 @@ export function decodeSystemSettingRows(
         // Ignore malformed persisted arrays; configuration integrity checks
         // on the resulting runtime snapshot remain fail-closed.
       }
+      continue;
+    }
+
+    if (BOOLEAN_KEYS.has(configKey)) {
+      (updates as any)[configKey] = raw === 'true';
+      continue;
+    }
+
+    if (configKey === 'firstLiveArmedAt') {
+      (updates as any)[configKey] = raw.trim() !== '' ? Number(raw) : null;
       continue;
     }
 

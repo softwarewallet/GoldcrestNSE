@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { generateFirstLiveFingerprint, maskReservationToken } from '../../../services/firstLiveService';
 import { executeQuery } from '../../../database/db';
 import { BaseBrokerAdapter } from '../BaseBrokerAdapter';
 import {
@@ -1156,10 +1157,11 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
       );
 
       const reservation = rows[0];
+      const maskedToken = maskReservationToken(reservationToken);
       if (!reservation) {
         throw new BrokerError(
           'FIRST_LIVE_ORDER_NOT_AUTHORIZED',
-          `FIRST_LIVE_ORDER_NOT_AUTHORIZED: Reservation token '${reservationToken}' is invalid.`,
+          `FIRST_LIVE_ORDER_NOT_AUTHORIZED: Reservation token '${maskedToken}' is invalid.`,
           'FIVE_PAISA',
           this.environment
         );
@@ -1168,7 +1170,7 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
       if (reservation.status !== 'RESERVED') {
         throw new BrokerError(
           'FIRST_LIVE_ORDER_NOT_AUTHORIZED',
-          `FIRST_LIVE_ORDER_NOT_AUTHORIZED: Reservation token '${reservationToken}' has already been finalized/consumed (Status: ${reservation.status}).`,
+          `FIRST_LIVE_ORDER_NOT_AUTHORIZED: Reservation token '${maskedToken}' has already been finalized/consumed (Status: ${reservation.status}).`,
           'FIVE_PAISA',
           this.environment
         );
@@ -1224,6 +1226,17 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
         throw new BrokerError(
           'FIRST_LIVE_ORDER_NOT_AUTHORIZED',
           `FIRST_LIVE_ORDER_NOT_AUTHORIZED: Reservation idempotency key mismatch (Expected: ${reservation.idempotency_key}, Order: ${reqIdempotencyKey}).`,
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+
+      // Cryptographic Order Fingerprint Validation
+      const expectedFingerprint = generateFirstLiveFingerprint(order);
+      if (reservation.fingerprint && reservation.fingerprint !== expectedFingerprint) {
+        throw new BrokerError(
+          'FIRST_LIVE_ORDER_NOT_AUTHORIZED',
+          'FIRST_LIVE_ORDER_NOT_AUTHORIZED: Cryptographic order fingerprint mismatch. The order details have been tampered with or do not match the reservation context.',
           'FIVE_PAISA',
           this.environment
         );

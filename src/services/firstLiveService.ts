@@ -109,6 +109,19 @@ export class FirstLiveService {
     }
 
     const now = Date.now();
+    await executeTransaction((db) => {
+      const updateSetting = (key: string, value: string) => {
+        db.run(
+          "INSERT OR REPLACE INTO system_settings (key, value, updated_at) VALUES (?, ?, ?)",
+          [key, value, now]
+        );
+      };
+      updateSetting('EXECUTION_MODE', 'FIRST_LIVE_CERTIFICATION');
+      updateSetting('FIRST_LIVE_ARMED', 'true');
+      updateSetting('FIRST_LIVE_ARMED_AT', String(now));
+      updateSetting('FIRST_LIVE_LOCKED', 'false');
+    });
+
     updateSystemConfig({
       executionMode: 'FIRST_LIVE_CERTIFICATION',
       firstLiveArmed: true,
@@ -137,6 +150,18 @@ export class FirstLiveService {
    * Disarms First-Live Mode and reverts execution mode to LIVE_DRY_RUN.
    */
   async disarmFirstLive(): Promise<{ success: boolean; message: string }> {
+    const now = Date.now();
+    await executeTransaction((db) => {
+      const updateSetting = (key: string, value: string) => {
+        db.run(
+          "INSERT OR REPLACE INTO system_settings (key, value, updated_at) VALUES (?, ?, ?)",
+          [key, value, now]
+        );
+      };
+      updateSetting('EXECUTION_MODE', 'LIVE_DRY_RUN');
+      updateSetting('FIRST_LIVE_ARMED', 'false');
+    });
+
     updateSystemConfig({
       executionMode: 'LIVE_DRY_RUN',
       firstLiveArmed: false
@@ -204,31 +229,48 @@ export class FirstLiveService {
   async reserveFirstLiveOrder(params: ReserveFirstLiveOrderParams): Promise<ReserveFirstLiveOrderResult> {
     const { correlationId, idempotencyKey, orderRequest } = params;
 
-    return executeTransaction((db) => {
+    const txResult = await executeTransaction((db) => {
+      const getSetting = (key: string): string | null => {
+        const stmtSetting = db.prepare("SELECT value FROM system_settings WHERE key = ?");
+        stmtSetting.bind([key]);
+        let val: string | null = null;
+        if (stmtSetting.step()) {
+          val = stmtSetting.getAsObject().value as string;
+        }
+        stmtSetting.free();
+        return val;
+      };
+
       const config = getSystemConfig();
-      const mode = config.executionMode || 'LIVE_DRY_RUN';
+      const mode = getSetting('EXECUTION_MODE') ?? config.executionMode ?? 'LIVE_DRY_RUN';
+      const isArmed = getSetting('FIRST_LIVE_ARMED') !== null ? (getSetting('FIRST_LIVE_ARMED') === 'true') : !!config.firstLiveArmed;
+      const isLocked = getSetting('FIRST_LIVE_LOCKED') !== null ? (getSetting('FIRST_LIVE_LOCKED') === 'true') : !!config.firstLiveLocked;
+      const submitted = getSetting('FIRST_LIVE_ORDERS_SUBMITTED') !== null ? Number(getSetting('FIRST_LIVE_ORDERS_SUBMITTED')) : (config.firstLiveOrdersSubmitted ?? 0);
 
       if (mode !== 'FIRST_LIVE_CERTIFICATION') {
         return {
           success: false,
           reservationToken: null,
-          message: `FIRST_LIVE_RESERVATION_FAILED: System execution mode is ${mode}, not FIRST_LIVE_CERTIFICATION.`
+          message: `FIRST_LIVE_RESERVATION_FAILED: System execution mode is ${mode}, not FIRST_LIVE_CERTIFICATION.`,
+          newCount: submitted
         };
       }
 
-      if (!config.firstLiveArmed) {
+      if (!isArmed) {
         return {
           success: false,
           reservationToken: null,
-          message: 'FIRST_LIVE_RESERVATION_FAILED: First-Live mode is not armed.'
+          message: 'FIRST_LIVE_RESERVATION_FAILED: First-Live mode is not armed.',
+          newCount: submitted
         };
       }
 
-      if (config.firstLiveLocked || (config.firstLiveOrdersSubmitted || 0) >= 1) {
+      if (isLocked || submitted >= 1) {
         return {
           success: false,
           reservationToken: null,
-          message: 'FIRST_LIVE_RESERVATION_FAILED: First-Live order budget has already been consumed (1/1 orders used).'
+          message: 'FIRST_LIVE_RESERVATION_FAILED: First-Live order budget has already been consumed (1/1 orders used).',
+          newCount: submitted
         };
       }
 
@@ -236,7 +278,8 @@ export class FirstLiveService {
         return {
           success: false,
           reservationToken: null,
-          message: 'FIRST_LIVE_RESERVATION_FAILED: Emergency stop is active.'
+          message: 'FIRST_LIVE_RESERVATION_FAILED: Emergency stop is active.',
+          newCount: submitted
         };
       }
 
@@ -254,29 +297,38 @@ export class FirstLiveService {
         return {
           success: false,
           reservationToken: null,
-          message: 'FIRST_LIVE_RESERVATION_FAILED: First-Live single order allowance is already reserved or submitted in ledger.'
+          message: 'FIRST_LIVE_RESERVATION_FAILED: First-Live single order allowance is already reserved or submitted in ledger.',
+          newCount: submitted
         };
       }
 
       const now = Date.now();
       const reservationToken = `fl-res-${crypto.randomBytes(32).toString('hex')}`;
+      const fingerprint = generateFirstLiveFingerprint(orderRequest);
 
-      const newCount = Math.max(1, (config.firstLiveOrdersSubmitted || 0) + 1);
-      updateSystemConfig({
-        executionMode: 'LIVE_DRY_RUN',
-        firstLiveArmed: false,
-        firstLiveOrdersSubmitted: newCount,
-        firstLiveLocked: true
-      });
+      const newCount = Math.max(1, submitted + 1);
+
+      const updateSetting = (key: string, value: string) => {
+        db.run(
+          "INSERT OR REPLACE INTO system_settings (key, value, updated_at) VALUES (?, ?, ?)",
+          [key, value, now]
+        );
+      };
+
+      updateSetting('EXECUTION_MODE', 'LIVE_DRY_RUN');
+      updateSetting('FIRST_LIVE_ARMED', 'false');
+      updateSetting('FIRST_LIVE_ORDERS_SUBMITTED', String(newCount));
+      updateSetting('FIRST_LIVE_LOCKED', 'true');
 
       db.run(
         `INSERT INTO first_live_ledger (
-          id, reservation_token, correlation_id, idempotency_key, broker, environment, execution_mode,
+          id, reservation_token, fingerprint, correlation_id, idempotency_key, broker, environment, execution_mode,
           symbol, side, quantity, requested_price, status, attempted_at, payload_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           reservationToken,
           reservationToken,
+          fingerprint,
           correlationId,
           idempotencyKey,
           (orderRequest as any).broker || 'FIVE_PAISA',
@@ -288,12 +340,12 @@ export class FirstLiveService {
           orderRequest.price || 0,
           'RESERVED',
           now,
-          JSON.stringify({ correlationId, idempotencyKey, orderRequest, reservationToken, reservedAt: now })
+          JSON.stringify({ correlationId, idempotencyKey, orderRequest, reservationToken, reservedAt: now, fingerprint })
         ]
       );
 
       liveRuntimeLog('SYSTEM', 'FIRST_LIVE_RESERVED', {
-        reservationToken,
+        reservationToken: maskReservationToken(reservationToken),
         correlationId,
         idempotencyKey,
         symbol: orderRequest.symbol,
@@ -304,15 +356,31 @@ export class FirstLiveService {
         broker: 'FIVE_PAISA',
         environment: 'LIVE',
         result: 'SUCCESS',
-        details: { reservationToken, correlationId, idempotencyKey, symbol: orderRequest.symbol }
+        details: { reservationToken: maskReservationToken(reservationToken), correlationId, idempotencyKey, symbol: orderRequest.symbol }
       });
 
       return {
         success: true,
         reservationToken,
-        message: 'First-Live order successfully reserved.'
+        message: 'First-Live order successfully reserved.',
+        newCount
       };
     });
+
+    if (txResult.success && txResult.reservationToken) {
+      updateSystemConfig({
+        executionMode: 'LIVE_DRY_RUN',
+        firstLiveArmed: false,
+        firstLiveOrdersSubmitted: txResult.newCount,
+        firstLiveLocked: true
+      });
+    }
+
+    return {
+      success: txResult.success,
+      reservationToken: txResult.reservationToken,
+      message: txResult.message
+    };
   }
 
   /**
@@ -326,15 +394,20 @@ export class FirstLiveService {
     const config = getSystemConfig();
     const newCount = Math.max(1, config.firstLiveOrdersSubmitted || 0);
 
-    updateSystemConfig({
-      executionMode: 'LIVE_DRY_RUN',
-      firstLiveArmed: false,
-      firstLiveOrdersSubmitted: newCount,
-      firstLiveLocked: true
-    });
+    await executeTransaction((db) => {
+      const updateSetting = (key: string, value: string) => {
+        db.run(
+          "INSERT OR REPLACE INTO system_settings (key, value, updated_at) VALUES (?, ?, ?)",
+          [key, value, now]
+        );
+      };
 
-    try {
-      await executeRun(
+      updateSetting('EXECUTION_MODE', 'LIVE_DRY_RUN');
+      updateSetting('FIRST_LIVE_ARMED', 'false');
+      updateSetting('FIRST_LIVE_ORDERS_SUBMITTED', String(newCount));
+      updateSetting('FIRST_LIVE_LOCKED', 'true');
+
+      db.run(
         `UPDATE first_live_ledger SET status = ?, broker_order_id = ?, reconciled_at = ?, result_json = ? WHERE reservation_token = ? OR id = ?`,
         [
           status,
@@ -345,12 +418,17 @@ export class FirstLiveService {
           reservationToken
         ]
       );
-    } catch (err) {
-      console.warn('Failed to update first_live_ledger SQLite table on finalization:', err);
-    }
+    });
+
+    updateSystemConfig({
+      executionMode: 'LIVE_DRY_RUN',
+      firstLiveArmed: false,
+      firstLiveOrdersSubmitted: newCount,
+      firstLiveLocked: true
+    });
 
     liveRuntimeLog('SYSTEM', 'FIRST_LIVE_FINALIZED', {
-      reservationToken,
+      reservationToken: maskReservationToken(reservationToken),
       status,
       brokerOrderId,
       error,
@@ -361,7 +439,7 @@ export class FirstLiveService {
       broker: 'FIVE_PAISA',
       environment: 'LIVE',
       result: status === 'ACCEPTED' || status === 'FILLED' ? 'SUCCESS' : 'FAILURE',
-      details: { reservationToken, status, brokerOrderId, error }
+      details: { reservationToken: maskReservationToken(reservationToken), status, brokerOrderId, error }
     });
   }
 
@@ -388,6 +466,36 @@ export class FirstLiveService {
       });
     }
   }
+}
+
+export function generateFirstLiveFingerprint(orderRequest: OrderRequest): string {
+  const broker = (orderRequest as any).broker || 'FIVE_PAISA';
+  const environment = 'LIVE';
+  const market = orderRequest.market || 'INDIAN_OPTIONS';
+  const symbol = orderRequest.symbol || '';
+  const side = orderRequest.side || 'BUY';
+  const orderType = orderRequest.orderType || 'LIMIT';
+  const quantity = Number(orderRequest.quantity || 0);
+  const price = Number(orderRequest.price || 0);
+
+  const canonicalString = [
+    broker,
+    environment,
+    market,
+    symbol,
+    side,
+    orderType,
+    quantity,
+    price
+  ].join('|');
+
+  return crypto.createHash('sha256').update(canonicalString).digest('hex');
+}
+
+export function maskReservationToken(token: string | null): string {
+  if (!token) return 'null';
+  if (token.length <= 12) return '***';
+  return `${token.slice(0, 11)}***${token.slice(-8)}`;
 }
 
 export const firstLiveService = new FirstLiveService();

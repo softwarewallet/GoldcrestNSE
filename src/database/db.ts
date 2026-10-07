@@ -526,6 +526,7 @@ function initSchema(db: Database) {
     CREATE TABLE IF NOT EXISTS first_live_ledger (
       id TEXT PRIMARY KEY,
       reservation_token TEXT,
+      fingerprint TEXT,
       correlation_id TEXT NOT NULL,
       idempotency_key TEXT NOT NULL,
       broker TEXT NOT NULL,
@@ -767,7 +768,8 @@ function initSchema(db: Database) {
     'ALTER TABLE live_trade_research ADD COLUMN max_favorable_price REAL;',
     'ALTER TABLE live_trade_research ADD COLUMN max_adverse_price REAL;',
     'ALTER TABLE live_trade_research ADD COLUMN holding_duration_ms INTEGER;',
-    'ALTER TABLE first_live_ledger ADD COLUMN reservation_token TEXT;'
+    'ALTER TABLE first_live_ledger ADD COLUMN reservation_token TEXT;',
+    'ALTER TABLE first_live_ledger ADD COLUMN fingerprint TEXT;'
   ];
   try {
     db.run('ALTER TABLE execution_intents ADD COLUMN claim_token TEXT;');
@@ -816,7 +818,13 @@ function seedInitialData(db: Database) {
     ('DEFAULT_RISK_PCT', '1.0', ${now}),
     ('STRIKE_DEPTH', '7', ${now}),
     ('MAX_TRADE_VALUE_FOREX_USD', '100000', ${now}),
-    ('MAX_TRADE_VALUE_INDIAN_INR', '1000000', ${now});
+    ('MAX_TRADE_VALUE_INDIAN_INR', '1000000', ${now}),
+    ('EXECUTION_MODE', 'LIVE_DRY_RUN', ${now}),
+    ('FIRST_LIVE_ARMED', 'false', ${now}),
+    ('FIRST_LIVE_ORDERS_ALLOWED', '1', ${now}),
+    ('FIRST_LIVE_ORDERS_SUBMITTED', '0', ${now}),
+    ('FIRST_LIVE_LOCKED', 'false', ${now}),
+    ('FIRST_LIVE_ARMED_AT', '', ${now});
   `);
 
   // Enforce LIVE_ONLY persistence.

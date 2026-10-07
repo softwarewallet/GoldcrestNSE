@@ -60,6 +60,11 @@ async function runFirstLiveCertificationTests() {
     await executeRun('DELETE FROM first_live_ledger');
   } catch {}
 
+  await executeRun("UPDATE system_settings SET value = 'LIVE_DRY_RUN' WHERE key = 'EXECUTION_MODE'");
+  await executeRun("UPDATE system_settings SET value = 'false' WHERE key = 'FIRST_LIVE_ARMED'");
+  await executeRun("UPDATE system_settings SET value = '0' WHERE key = 'FIRST_LIVE_ORDERS_SUBMITTED'");
+  await executeRun("UPDATE system_settings SET value = 'false' WHERE key = 'FIRST_LIVE_LOCKED'");
+
   updateSystemConfig({
     executionMode: 'LIVE_DRY_RUN',
     firstLiveArmed: false,
@@ -323,6 +328,31 @@ async function runFirstLiveCertificationTests() {
   if (fetchCallsCount > 0) throw new Error('FAILED TEST 5: Network call made on tampered token!');
   console.log('  ✓ TEST 5: Invalid/Tampered Token blocked cleanly with 0 broker calls.');
 
+  // TEST 7 — Price/Fingerprint Mismatch
+  fetchCallsCount = 0;
+  let test7Caught = false;
+  try {
+    await adapter.placeOrder({
+      market: 'INDIAN_OPTIONS',
+      symbol: 'NIFTY26OCT23500CE',
+      side: 'BUY',
+      orderType: 'LIMIT',
+      quantity: 25,
+      price: 100, // Reservation price was 50 (mismatch triggers fingerprint mismatch!)
+      firstLiveReservationToken: reservation1.reservationToken,
+      _firstLiveIdempotencyKey: 'test-idem-success'
+    } as any);
+  } catch (err: any) {
+    if (err.message.includes('FIRST_LIVE_ORDER_NOT_AUTHORIZED') && err.message.includes('fingerprint mismatch')) {
+      test7Caught = true;
+    } else {
+      console.warn('Test 7 caught unexpected error:', err.message);
+    }
+  }
+  if (!test7Caught) throw new Error('FAILED TEST 7: Allowed placeOrder with wrong price (fingerprint mismatch)!');
+  if (fetchCallsCount > 0) throw new Error('FAILED TEST 7: Network call made on fingerprint mismatch!');
+  console.log('  ✓ TEST 7: Fingerprint/Price Mismatch blocked cleanly with 0 broker calls.');
+
   // ----------------------------------------------------------------
   // G. Reserved order passes adapter interlock
   // ----------------------------------------------------------------
@@ -383,6 +413,11 @@ async function runFirstLiveCertificationTests() {
   console.log('\n[H-I] Testing Broker Rejection / Failure Consumes Allowance...');
 
   // Reset to armed
+  await executeRun("UPDATE system_settings SET value = 'FIRST_LIVE_CERTIFICATION' WHERE key = 'EXECUTION_MODE'");
+  await executeRun("UPDATE system_settings SET value = 'true' WHERE key = 'FIRST_LIVE_ARMED'");
+  await executeRun("UPDATE system_settings SET value = '0' WHERE key = 'FIRST_LIVE_ORDERS_SUBMITTED'");
+  await executeRun("UPDATE system_settings SET value = 'false' WHERE key = 'FIRST_LIVE_LOCKED'");
+
   updateSystemConfig({
     executionMode: 'FIRST_LIVE_CERTIFICATION',
     firstLiveArmed: true,
