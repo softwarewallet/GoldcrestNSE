@@ -1387,10 +1387,11 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
 
     // INTERNAL CERTIFICATION BOUNDARY HOOK
     // This hook is strictly for automated zero-transmission certification.
-    // It is ONLY active when NODE_ENV is 'test' and must NEVER be used 
-    // to bypass real broker authorization in production.
-    if (process.env.NODE_ENV === 'test' && (global as any).__GOLDCREST_CERT_BOUNDARY_HOOK) {
-      return (global as any).__GOLDCREST_CERT_BOUNDARY_HOOK(payload);
+    if ((global as any).__GOLDCREST_CERT_BOUNDARY_HOOK) {
+      if (process.env.NODE_ENV !== 'test') {
+        throw new BrokerError('SECURITY_VIOLATION', '5paisa certification boundary hook detected in non-test environment. Order submission aborted for safety.', 'FIVE_PAISA', this.environment);
+      }
+      return (global as any).__GOLDCREST_CERT_BOUNDARY_HOOK({ type: 'PLACE_ORDER', payload });
     }
 
     const response = await fetch(`${this.getApiHost()}/VendorsAPI/Service1.svc/V1/PlaceOrderRequest`, {
@@ -1473,6 +1474,14 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
     if (modifications.stopLoss !== undefined) payload.StopLossPrice = Number(modifications.stopLoss);
     payload.DisQty = 0;
 
+    // INTERNAL CERTIFICATION BOUNDARY HOOK
+    if ((global as any).__GOLDCREST_CERT_BOUNDARY_HOOK) {
+      if (process.env.NODE_ENV !== 'test') {
+        throw new BrokerError('SECURITY_VIOLATION', '5paisa certification boundary hook detected in non-test environment. Order modification aborted for safety.', 'FIVE_PAISA', this.environment);
+      }
+      return (global as any).__GOLDCREST_CERT_BOUNDARY_HOOK({ type: 'MODIFY_ORDER', orderId, modifications, payload });
+    }
+
     const response = await this.postUserApi(
       `${this.getApiHost()}/VendorsAPI/Service1.svc/V1/ModifyOrderRequest`,
       '5PModifyOrdReqV1',
@@ -1506,10 +1515,20 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
     );
     if (!target?.ExchOrderID) return false;
 
+    const payload = { ExchOrderID: String(target.ExchOrderID) };
+
+    // INTERNAL CERTIFICATION BOUNDARY HOOK
+    if ((global as any).__GOLDCREST_CERT_BOUNDARY_HOOK) {
+      if (process.env.NODE_ENV !== 'test') {
+        throw new BrokerError('SECURITY_VIOLATION', '5paisa certification boundary hook detected in non-test environment. Order cancellation aborted for safety.', 'FIVE_PAISA', this.environment);
+      }
+      return (global as any).__GOLDCREST_CERT_BOUNDARY_HOOK({ type: 'CANCEL_ORDER', orderId, payload });
+    }
+
     const response = await this.postUserApi(
       `${this.getApiHost()}/VendorsAPI/Service1.svc/V1/CancelOrderRequest`,
       '5PCancelOrdReqV1',
-      { ExchOrderID: String(target.ExchOrderID) }
+      payload
     );
     const body = response?.body;
     const headStatus = String(response?.head?.status ?? response?.head?.Status ?? '0');

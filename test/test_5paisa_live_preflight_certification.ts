@@ -65,9 +65,18 @@ async function run5PaisaPreflightCertification() {
   };
 
   // 2. Set up the internal certification boundary hook
-  (global as any).__GOLDCREST_CERT_BOUNDARY_HOOK = (_payload: any) => {
+  (global as any).__GOLDCREST_CERT_BOUNDARY_HOOK = (context: any) => {
     orderBoundaryAttemptCount++;
-    return { id: 'mocked-order-id', status: 'ACCEPTED' };
+    if (context.type === 'PLACE_ORDER') {
+      return { id: 'mocked-order-id', status: 'ACCEPTED' };
+    }
+    if (context.type === 'MODIFY_ORDER') {
+      return { id: context.orderId, status: 'ACCEPTED' };
+    }
+    if (context.type === 'CANCEL_ORDER') {
+      return true;
+    }
+    return null;
   };
 
   try {
@@ -178,17 +187,17 @@ async function run5PaisaPreflightCertification() {
     }
     (global as any).__GOLDCREST_CERT_BOUNDARY_HOOK = hook;
 
-    // Test 6: Production Certification-Hook Bypass Test
-    console.log('\n[6] Testing Production runtime rejection of certification hook...');
+    // Test 6: Production Certification-Hook Fail-Closed Test
+    console.log('\n[6] Testing Production Fail-Closed (SECURITY_VIOLATION)...');
     process.env.NODE_ENV = 'production';
     actualOrderHttpAttemptCount = 0;
     try {
-      // With hook set but NODE_ENV=production, it should fall through to fetch (and be caught by our guard)
+      // With hook set but NODE_ENV=production, it should throw SECURITY_VIOLATION
       await adapter.placeOrder(validOrderRequest);
       throw new Error('FAILED: placeOrder used certification hook even in production runtime!');
     } catch (err: any) {
-      if (err.message.includes('TEST SAFETY FAILURE: Real 5paisa order API attempted')) {
-        console.log('  ✓ Production runtime correctly ignored the certification hook.');
+      if (err.code === 'SECURITY_VIOLATION' && err.message.includes('certification boundary hook detected in non-test environment')) {
+        console.log('  ✓ Production runtime correctly failed-closed upon detecting hook.');
       } else {
         throw err;
       }
