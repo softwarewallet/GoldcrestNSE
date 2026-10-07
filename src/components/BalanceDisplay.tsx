@@ -6,23 +6,19 @@ interface BalanceDisplayProps {
   environment?: string;
 }
 
-const BROKERS: BrokerType[] = ['CTRADER', 'FIVE_PAISA'];
+const BROKERS: BrokerType[] = ['FIVE_PAISA'];
 
 export const BalanceDisplay: React.FC<BalanceDisplayProps> = () => {
-  const [accounts, setAccounts] = useState<Record<BrokerType, BrokerAccountInfo | null>>({
-    CTRADER: null,
+  const [accounts, setAccounts] = useState<Record<string, BrokerAccountInfo | null>>({
     FIVE_PAISA: null
   });
-  const [errors, setErrors] = useState<Record<BrokerType, string | null>>({
-    CTRADER: null,
+  const [errors, setErrors] = useState<Record<string, string | null>>({
     FIVE_PAISA: null
   });
-  const [loading, setLoading] = useState<Record<BrokerType, boolean>>({
-    CTRADER: false,
+  const [loading, setLoading] = useState<Record<string, boolean>>({
     FIVE_PAISA: false
   });
-  const [lastUpdated, setLastUpdated] = useState<Record<BrokerType, number | null>>({
-    CTRADER: null,
+  const [lastUpdated, setLastUpdated] = useState<Record<string, number | null>>({
     FIVE_PAISA: null
   });
 
@@ -35,12 +31,9 @@ export const BalanceDisplay: React.FC<BalanceDisplayProps> = () => {
   const [totpSuccess, setTotpSuccess] = useState<string | null>(null);
 
   const fetchBalances = async (force: boolean = false) => {
-    setLoading({ CTRADER: true, FIVE_PAISA: true });
+    setLoading({ FIVE_PAISA: true });
 
     try {
-      // Use the shared broker-status snapshot rather than making two additional
-      // broker account calls from the header. The server coalesces/caches this
-      // endpoint, preventing UI refresh loops from triggering broker throttling.
       const url = force ? '/api/brokers/status?force=true' : '/api/brokers/status';
       const response = await fetch(url, {
         headers: { Accept: 'application/json' },
@@ -52,12 +45,10 @@ export const BalanceDisplay: React.FC<BalanceDisplayProps> = () => {
         throw new Error(String(data?.error || data?.message || `Broker status request failed (HTTP ${response.status})`));
       }
 
-      const nextAccounts: Record<BrokerType, BrokerAccountInfo | null> = {
-        CTRADER: null,
+      const nextAccounts: Record<string, BrokerAccountInfo | null> = {
         FIVE_PAISA: null
       };
-      const nextErrors: Record<BrokerType, string | null> = {
-        CTRADER: null,
+      const nextErrors: Record<string, string | null> = {
         FIVE_PAISA: null
       };
       const now = Date.now();
@@ -75,9 +66,6 @@ export const BalanceDisplay: React.FC<BalanceDisplayProps> = () => {
         const message = String(row?.error || row?.lastRefreshError || '');
         nextErrors[broker] = message || `${broker} live account data unavailable`;
 
-        // Keep the last known account visible during a transient provider
-        // throttle. The displayed account may be stale, but it is never used
-        // by order execution/safety validation.
         if (row?.code === 'RATE_LIMITED' || row?.lastRefreshError) {
           const previousAccount = accounts[broker];
           if (previousAccount) {
@@ -90,18 +78,16 @@ export const BalanceDisplay: React.FC<BalanceDisplayProps> = () => {
       setAccounts(nextAccounts);
       setErrors(nextErrors);
       setLastUpdated(prev => ({
-        CTRADER: nextAccounts.CTRADER ? now : prev.CTRADER,
+        ...prev,
         FIVE_PAISA: nextAccounts.FIVE_PAISA ? now : prev.FIVE_PAISA
       }));
     } catch (err: any) {
-      // Preserve the last authoritative broker snapshot during a transient
-      // server/provider failure instead of replacing it with blank cards.
       setErrors(prev => ({
-        CTRADER: prev.CTRADER || err?.message || 'Broker status temporarily unavailable',
-        FIVE_PAISA: prev.FIVE_PAISA || err?.message || 'Broker status temporarily unavailable'
+        ...prev,
+        FIVE_PAISA: prev.FIVE_PAISA || err?.message || '5paisa status temporarily unavailable'
       }));
     } finally {
-      setLoading({ CTRADER: false, FIVE_PAISA: false });
+      setLoading({ FIVE_PAISA: false });
     }
   };
   useEffect(() => {
@@ -150,8 +136,6 @@ export const BalanceDisplay: React.FC<BalanceDisplayProps> = () => {
   };
 
   const isTotpRequiredError = (errorMsg: string | null, broker: BrokerType) => {
-    // cTrader does not use TOTP in Goldcrest. Authentication/session/token
-    // errors from cTrader must never be presented as a TOTP requirement.
     if (broker !== 'FIVE_PAISA' || !errorMsg) return false;
     const lower = errorMsg.toLowerCase();
     return (
@@ -162,7 +146,7 @@ export const BalanceDisplay: React.FC<BalanceDisplayProps> = () => {
     );
   };
 
-  const formatCurrency = (value: number | undefined, currency = 'USD') => {
+  const formatCurrency = (value: number | undefined, currency = 'INR') => {
     if (value === undefined || value === null || !Number.isFinite(value)) return '--';
     const normalized = currency.toUpperCase();
     return new Intl.NumberFormat(normalized === 'INR' ? 'en-IN' : 'en-US', {
@@ -185,8 +169,8 @@ export const BalanceDisplay: React.FC<BalanceDisplayProps> = () => {
     const isLoading = loading[broker];
     const updated = lastUpdated[broker];
     const isStale = updated ? Date.now() - updated > 30000 : false;
-    const label = broker === 'CTRADER' ? 'cTrader' : '5paisa';
-    const market = broker === 'CTRADER' ? 'FOREX' : 'INDIAN MARKETS';
+    const label = '5paisa';
+    const market = 'INDIAN MARKETS';
 
     const metric = (
       title: string,
@@ -198,13 +182,13 @@ export const BalanceDisplay: React.FC<BalanceDisplayProps> = () => {
           <span>{title}</span>
         </div>
         <div className={`mt-0.5 text-[12px] font-semibold font-mono ${tone}`}>
-          {formatCurrency(value, account?.currency)}
+          {formatCurrency(value, account?.currency || 'INR')}
         </div>
       </div>
     );
 
     return (
-      <div key={broker} id={`balance_display_${broker.toLowerCase()}`} className="flex flex-col bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-lg py-2 px-3 min-w-[330px] shadow-sm font-mono">
+      <div key={broker} id={`balance_display_${broker.toLowerCase()}`} className="flex flex-col bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-lg py-2 px-3 min-w-[340px] shadow-sm font-mono">
         <div className="flex items-start justify-between mb-1.5">
           <div className="flex items-center gap-1.5">
             <span className={`w-1.5 h-1.5 rounded-full ${isLoading ? 'bg-amber-400 animate-pulse' : account?.connectionStatus === 'CONNECTED' ? 'bg-emerald-400' : 'bg-rose-400'}`} />
@@ -236,7 +220,7 @@ export const BalanceDisplay: React.FC<BalanceDisplayProps> = () => {
             </div>
             <div className="mt-1.5 pt-1.5 border-t border-slate-800/60 flex items-center justify-between text-[9px] text-slate-500">
               <span className="truncate max-w-[145px]" title={account.accountId}>A/C {account.accountId}</span>
-              <span>{account.currency}</span>
+              <span>{account.currency || 'INR'}</span>
               <span className={isStale ? 'text-amber-400 font-bold' : 'text-slate-500'}>
                 <Clock className="inline w-2.5 h-2.5 mr-0.5" />{isStale ? 'STALE' : timeAgo(updated)}
               </span>
@@ -272,8 +256,7 @@ export const BalanceDisplay: React.FC<BalanceDisplayProps> = () => {
 
   return (
     <>
-      <div id="dual_live_balance_display" className="flex items-center gap-2">
-        {renderCard('CTRADER')}
+      <div id="live_balance_display" className="flex items-center">
         {renderCard('FIVE_PAISA')}
       </div>
 

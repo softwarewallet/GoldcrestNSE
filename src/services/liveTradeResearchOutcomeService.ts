@@ -48,7 +48,7 @@ export async function syncLiveTradeResearchOutcomes(): Promise<void> {
       return;
     }
 
-    const adapter = brokerRegistry.getAdapter('CTRADER', 'LIVE');
+    const adapter = brokerRegistry.getAdapter('FIVE_PAISA', 'LIVE');
     const positions = await adapter.getPositions();
     const positionsById = new Map(
       positions.map(position => [String(position.brokerPositionId || position.id), position])

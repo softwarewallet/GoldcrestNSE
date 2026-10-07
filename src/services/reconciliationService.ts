@@ -1,5 +1,6 @@
 import { executeQuery, executeRun } from '../database/db';
 import { brokerRegistry } from '../brokers/registry';
+import { BrokerType } from '../brokers/types';
 
 export type ReconciliationStatus =
   | 'MATCHED' | 'RECONCILIATION_MISMATCH' | 'ORPHAN_INTERNAL'
@@ -99,8 +100,14 @@ export class ReconciliationService {
     return record;
   }
 
-  public async captureBrokerSnapshot(broker: 'CTRADER' | 'FIVE_PAISA'): Promise<any> {
-    const adapter = brokerRegistry.getAdapter(broker, 'LIVE');
+  public async captureBrokerSnapshot(broker: BrokerType = 'FIVE_PAISA'): Promise<any> {
+    if (broker !== 'FIVE_PAISA') return null;
+    let adapter: any = null;
+    try {
+      adapter = brokerRegistry.getAdapter(broker, 'LIVE');
+    } catch {
+      return null;
+    }
     if (!adapter) return null;
     try {
       const [account, positions, orders] = await Promise.all([
@@ -139,9 +146,15 @@ export class ReconciliationService {
     }));
   }
 
-  public async getDailyLoss(broker:'CTRADER'|'FIVE_PAISA', currentBalance:number):Promise<number> {
-    const adapter = brokerRegistry.getAdapter(broker, 'LIVE');
-    if (typeof adapter.getDailyRealizedPnL === 'function') {
+  public async getDailyLoss(broker: BrokerType = 'FIVE_PAISA', currentBalance: number): Promise<number> {
+    if (broker !== 'FIVE_PAISA') return 0;
+    let adapter: any = null;
+    try {
+      adapter = brokerRegistry.getAdapter(broker, 'LIVE');
+    } catch {
+      return 0;
+    }
+    if (typeof adapter?.getDailyRealizedPnL === 'function') {
       try {
         const realizedPnL = await adapter.getDailyRealizedPnL();
         if (Number.isFinite(realizedPnL)) return Math.max(0, -Number(realizedPnL));

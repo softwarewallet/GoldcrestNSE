@@ -9,8 +9,7 @@ import { apiRateLimit, blockLegacyTradingModes, operatorAuthConfigured, operator
 
 import { getDatabase, getDatabaseStats, executeQuery, executeRun, persistDatabase } from './src/database/db';
 import { buildRuntimeHealthPayload, evaluateRuntimeReadiness } from './src/services/runtimeReadiness';
-import { getForexSessionState, getIndianSessionState } from './src/markets/common/session';
-import { FOREX_PAIRS, getForexPairConfig } from './src/markets/forex/instruments';
+import { getIndianSessionState } from './src/markets/common/session';
 import { INDIAN_UNDERLYINGS } from './src/markets/india_equity/underlyings';
 import { ScannerService } from './src/services/scannerService';
 import { getSystemConfig, updateSystemConfig, applyPersistedSystemConfig, prepareSystemConfigUpdate, persistSystemConfig } from './src/services/configService';
@@ -19,24 +18,13 @@ import { evaluateBrokerVerification } from './src/services/brokerVerificationSer
 import { loadPersistedSystemConfigFromDatabase, persistSystemConfigToDatabase } from './src/services/configPersistenceService';
 import { calculateStrategyPayoff } from './src/markets/india_options/strategySkeleton';
 
-// Phase 2A Forex Engines
-import { LiveForexProvider } from './src/markets/forex/provider';
-import { ForexSignalEngine } from './src/markets/forex/signalEngine';
-import { calculateIndicators } from './src/markets/forex/indicators';
-import { analyzeMarketStructure } from './src/markets/forex/marketStructure';
-import { calculateSupportResistance } from './src/markets/forex/supportResistance';
-import { analyzeMultiTimeframe } from './src/markets/forex/multiTimeframe';
-import { explainForexAnalysis } from './src/services/geminiExplainer';
-import { ForexTimeframe } from './src/markets/forex/types';
-
-// Phase 2B Broker Integration
+// Broker Integration & Safety
 import { BrokerError } from './src/brokers/errors';
 import { brokerRouter } from './src/brokers/brokerRoutes';
 import { killSwitch } from './src/brokers/safety/KillSwitch';
 import { LIVE_AUTO_EXECUTION_ALLOWED, refreshAutonomousExecutionPermission, armAutonomousExecutionGate, lockAutonomousExecutionGate, validateAutoLiveOrderPacket } from './src/brokers/safety/AutoExecutionEngine';
 import { autoTradingService } from './src/services/autoTradingService';
 import { initializeLiveRuntimeLog, getLiveRuntimeLogStatus, startLiveRuntimeLog, stopLiveRuntimeLog, getLiveRuntimeLogFile, listLiveRuntimeLogFiles, logApplicationAction, liveRuntimeLog } from './src/services/liveRuntimeLog';
-import { fetchLiveForexNews } from './src/services/liveNewsService';
 import { fetchIndianMarketNews } from './src/services/indianMarketNewsService';
 import {
   getMarketHistorySchedulerStatus,
@@ -1005,8 +993,9 @@ app.get('/api/observability/runtime', operatorAuthRequired, async (_req: Request
 // Operator authentication is a same-origin, HttpOnly session derived from the
 // server-side operator API key. The secret is never embedded in the client bundle.
 app.get('/api/operator/session', (req: Request, res: Response) => {
+  const address = String(req.socket.remoteAddress || req.ip || '').toLowerCase();
   const localDevelopment = process.env.NODE_ENV !== 'production'
-    && ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(String(req.socket.remoteAddress || req.ip || '').toLowerCase());
+    && (['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address) || !operatorAuthConfigured());
 
   res.json({
     configured: operatorAuthConfigured(),
@@ -1251,20 +1240,7 @@ app.get('/api/live-log/file', operatorAuthRequired, (req: Request, res: Response
 });
 
 
-const liveForexProvider = new LiveForexProvider();
-const forexSignalEngine = new ForexSignalEngine(undefined, liveForexProvider);
 const scannerService = new ScannerService();
-
-function extractForexPair(req: Request): string {
-  let p = req.params.pair;
-  if (!p && req.params.part1 && req.params.part2) {
-    p = `${req.params.part1}/${req.params.part2}`;
-  }
-  if (!p && req.body?.pair) {
-    p = req.body.pair;
-  }
-  return decodeURIComponent(p || 'EUR/USD').toUpperCase().trim();
-}
 
 async function hydratePersistedTradeLimits(): Promise<void> {
   // SQLite is authoritative. Rehydrate the complete known configuration set,
@@ -1346,14 +1322,12 @@ app.get('/api/health/ready', (req: Request, res: Response) => {
 });
 
 app.get('/api/status', (req: Request, res: Response) => {
-  const forexSessions = getForexSessionState();
   const indianSession = getIndianSessionState();
   const config = getSystemConfig();
 
   res.json({
     status: 'ONLINE',
     marketStatus: {
-      forex: forexSessions,
       indianEquity: indianSession
     },
     dataStatus: config.dataStatus,
@@ -1716,19 +1690,10 @@ app.post('/api/config', operatorAuthRequired, async (req: Request, res: Response
       updates.forexTakeProfitPips = value;
     }
 
-    const validForexPairs = new Set(FOREX_PAIRS.map(pair => pair.symbol.toUpperCase()));
     const validIndianUnderlyings = new Set(INDIAN_UNDERLYINGS.map(item => item.symbol.toUpperCase()));
-    const isValidForexSymbol = (symbol: string) => /^[A-Z]{3}\/[A-Z]{3}$/.test(symbol);
 
     if (requestedForexPairs !== undefined) {
-      if (!Array.isArray(requestedForexPairs) || requestedForexPairs.length === 0) {
-        return res.status(400).json({ error: 'Select at least one Forex instrument for the Auto Live working universe.' });
-      }
-      const normalized = [...new Set(requestedForexPairs.map((value: unknown) => String(value).toUpperCase().trim()))];
-      if (normalized.some(symbol => !isValidForexSymbol(symbol))) {
-        return res.status(400).json({ error: 'Forex instruments must use the BASE/QUOTE format, for example EUR/USD.' });
-      }
-      updates.autoLiveForexPairs = normalized;
+      updates.autoLiveForexPairs = Array.isArray(requestedForexPairs) ? requestedForexPairs : [];
     }
 
     if (requestedIndianUnderlyings !== undefined) {
@@ -1816,14 +1781,6 @@ app.post('/api/research-ai/server/test-prediction', operatorAuthRequired, async 
 app.get('/api/markets', (req: Request, res: Response) => {
   res.json([
     {
-      id: 'FOREX',
-      name: 'Forex (Currencies & Metals)',
-      currency: 'USD',
-      instrumentsCount: FOREX_PAIRS.length,
-      status: 'ACTIVE',
-      sessions: getForexSessionState()
-    },
-    {
       id: 'INDIA_EQUITY',
       name: 'Indian Equity Benchmark Indices',
       currency: 'INR',
@@ -1842,261 +1799,9 @@ app.get('/api/markets', (req: Request, res: Response) => {
   ]);
 });
 
-// 4. Forex Endpoints (Phase 2A Full Analysis Engine)
-const FOREX_PAIRS_CACHE_TTL_MS = 60_000;
-let forexPairsCache: { payload: any[]; expiresAt: number } | null = null;
-let forexPairsInFlight: Promise<any[]> | null = null;
-
-const INDIA_UNDERLYINGS_CACHE_TTL_MS = 60_000;
-let indiaUnderlyingsCache: { payload: any[]; expiresAt: number } | null = null;
-let indiaUnderlyingsInFlight: Promise<any[]> | null = null;
-
-const CANDLE_CACHE_TTL_MS = 30_000;
-const candleCache = new Map<string, { payload: any[]; expiresAt: number }>();
-const candleInFlight = new Map<string, Promise<any[]>>();
-
-app.get('/api/forex/pairs', async (_req: Request, res: Response) => {
-  try {
-    const now = Date.now();
-    if (forexPairsCache && now < forexPairsCache.expiresAt) {
-      return res.json(forexPairsCache.payload);
-    }
-    if (forexPairsInFlight) {
-      return res.json(await forexPairsInFlight);
-    }
-
-    forexPairsInFlight = (async () => {
-      const adapter = brokerRegistry.getAdapter('CTRADER', 'LIVE');
-      const instruments = await adapter.getInstruments();
-
-      const pairsWithQuotes = await Promise.all(instruments.map(async inst => {
-        try {
-          const quote = await adapter.getQuote(inst.symbol);
-          return {
-            ...inst,
-            baseCurrency: inst.symbol.split('/')[0],
-            quoteCurrency: inst.symbol.split('/')[1] || '',
-            bid: quote.bid,
-            ask: quote.ask,
-            spreadPips: Number((quote.spread * (inst.symbol.includes('JPY') ? 100 : 10000)).toFixed(1)),
-            changePips24h: undefined,
-            changePercent24h: undefined,
-            high24h: undefined,
-            low24h: undefined,
-            dataStatus: quote.status,
-            dataSource: quote.source
-          };
-        } catch (quoteErr: any) {
-          try {
-            if (!adapter.getHistoricalCandles) throw quoteErr;
-            const candles = await adapter.getHistoricalCandles(inst.symbol, '15M', 2);
-            const last = candles?.[candles.length - 1];
-            const previous = candles?.[candles.length - 2] || last;
-            const close = Number(last?.close || 0);
-            if (!(close > 0)) throw quoteErr;
-
-            const previousClose = Number(previous?.close || close);
-            const change = close - previousClose;
-            const divisor = inst.symbol.includes('JPY') ? 100 : 10000;
-
-            return {
-              ...inst,
-              baseCurrency: inst.symbol.split('/')[0],
-              quoteCurrency: inst.symbol.split('/')[1] || '',
-              bid: close,
-              ask: close,
-              spreadPips: 0,
-              changePips24h: Number((change * divisor).toFixed(1)),
-              changePercent24h: previousClose > 0
-                ? Number(((change / previousClose) * 100).toFixed(2))
-                : undefined,
-              high24h: Number.isFinite(Number(last?.high)) ? Number(last.high) : close,
-              low24h: Number.isFinite(Number(last?.low)) ? Number(last.low) : close,
-              dataStatus: 'DELAYED',
-              dataSource: 'CTRADER_HISTORICAL_CLOSE',
-              dataError: quoteErr?.message || String(quoteErr)
-            };
-          } catch (historyErr: any) {
-            return {
-              ...inst,
-              baseCurrency: inst.symbol.split('/')[0],
-              quoteCurrency: inst.symbol.split('/')[1] || '',
-              bid: undefined,
-              ask: undefined,
-              spreadPips: undefined,
-              changePips24h: undefined,
-              changePercent24h: undefined,
-              high24h: undefined,
-              low24h: undefined,
-              dataStatus: 'UNKNOWN',
-              dataSource: 'CTRADER_LIVE_API_UNAVAILABLE',
-              dataError: historyErr?.message || quoteErr?.message || String(quoteErr)
-            };
-          }
-        }
-      }));
-
-      forexPairsCache = {
-        payload: pairsWithQuotes,
-        expiresAt: Date.now() + FOREX_PAIRS_CACHE_TTL_MS
-      };
-      return pairsWithQuotes;
-    })().finally(() => {
-      forexPairsInFlight = null;
-    });
-
-    return res.json(await forexPairsInFlight);
-  } catch (err: any) {
-    res.status(503).json({
-      error: err?.code || 'LIVE_MARKET_DATA_UNAVAILABLE',
-      message: err?.message || 'Authoritative cTrader market data is unavailable.'
-    });
-  }
-});
-
-app.get('/api/forex/market-status', (req: Request, res: Response) => {
-  const status = liveForexProvider.getMarketStatus();
-  res.json(status);
-});
-
-app.get(['/api/forex/sessions'], (req: Request, res: Response) => {
-  const sessions = getForexSessionState();
-  res.json(sessions);
-});
-
-// Helper to get live-anchored candles
-async function getLiveAnchoredCandles(pair: string, tf: ForexTimeframe = '15M', limit: number = 80) {
-  const adapter = brokerRegistry.getAdapter('CTRADER');
-  if (!adapter.getHistoricalCandles) {
-    throw new BrokerError('UNAVAILABLE', 'Authoritative cTrader historical market-data capability is unavailable.', 'CTRADER', 'LIVE');
-  }
-  const candles = await adapter.getHistoricalCandles(pair, tf, limit);
-  if (!Array.isArray(candles) || candles.length === 0) {
-    throw new BrokerError('STALE_DATA', `No authoritative cTrader historical candles returned for ${pair} ${tf}.`, 'CTRADER', 'LIVE');
-  }
-  return candles;
-}
-
-app.get(['/api/forex/analysis/:pair', '/api/forex/analysis/:part1/:part2'], async (req: Request, res: Response) => {
-  try {
-    const pair = extractForexPair(req);
-    await liveForexProvider.refreshPair(pair);
-    const analysis = forexSignalEngine.analyzePair(pair);
-    try {
-      const adapter = brokerRegistry.getAdapter('CTRADER');
-      const quote = await adapter.getQuote(pair);
-      if (quote && quote.bid > 0) {
-        analysis.currentPrice = (quote.bid + quote.ask) / 2;
-      }
-    } catch (e) {}
-    res.json(analysis);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get(['/api/forex/candles/:pair', '/api/forex/candles/:part1/:part2'], async (req: Request, res: Response) => {
-  try {
-    const pair = extractForexPair(req);
-    const tf = (req.query.tf as ForexTimeframe) || '15M';
-    const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 80;
-    const candles = await getLiveAnchoredCandles(pair, tf, limit);
-    res.json(candles);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get(['/api/forex/indicators/:pair', '/api/forex/indicators/:part1/:part2'], async (req: Request, res: Response) => {
-  try {
-    const pair = extractForexPair(req);
-    const tf = (req.query.tf as ForexTimeframe) || '15M';
-    const candles = await getLiveAnchoredCandles(pair, tf, 80);
-    const indicators = calculateIndicators(candles);
-    res.json(indicators);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get(['/api/forex/structure/:pair', '/api/forex/structure/:part1/:part2'], async (req: Request, res: Response) => {
-  try {
-    const pair = extractForexPair(req);
-    const tf = (req.query.tf as ForexTimeframe) || '15M';
-    const candles = await getLiveAnchoredCandles(pair, tf, 80);
-    const structure = analyzeMarketStructure(candles);
-    res.json(structure);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get(['/api/forex/support-resistance/:pair', '/api/forex/support-resistance/:part1/:part2'], async (req: Request, res: Response) => {
-  try {
-    const pair = extractForexPair(req);
-    const tf = (req.query.tf as ForexTimeframe) || '15M';
-    const candles = await getLiveAnchoredCandles(pair, tf, 80);
-    const config = getForexPairConfig(pair);
-    const sr = calculateSupportResistance(candles, config.pipSize);
-    res.json(sr);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get(['/api/forex/multi-timeframe/:pair', '/api/forex/multi-timeframe/:part1/:part2'], async (req: Request, res: Response) => {
-  try {
-    const pair = extractForexPair(req);
-    const mtf = analyzeMultiTimeframe({
-      '1M': [],
-      '5M': await getLiveAnchoredCandles(pair, '5M', 60),
-      '15M': await getLiveAnchoredCandles(pair, '15M', 60),
-      '30M': [],
-      '1H': await getLiveAnchoredCandles(pair, '1H', 60),
-      '4H': await getLiveAnchoredCandles(pair, '4H', 60),
-      'Daily': await getLiveAnchoredCandles(pair, 'Daily', 60)
-    });
-    res.json(mtf);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get(['/api/forex/signal/:pair', '/api/forex/signal/:part1/:part2'], async (req: Request, res: Response) => {
-  try {
-    const pair = extractForexPair(req);
-    await liveForexProvider.refreshPair(pair);
-    const signal = await forexSignalEngine.generateSignal(pair);
-    res.json(signal);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/forex/signal/generate', async (req: Request, res: Response) => {
-  try {
-    const pair = extractForexPair(req);
-    await liveForexProvider.refreshPair(pair);
-    const signal = await forexSignalEngine.generateSignal(pair);
-    res.json(signal);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Phase 2A Explanation Endpoint
-app.post('/api/forex/explain', async (req: Request, res: Response) => {
-  try {
-    let analysis = req.body?.analysis;
-    if (!analysis) {
-      const pair = extractForexPair(req);
-      analysis = forexSignalEngine.analyzePair(pair);
-    }
-    const explanation = await explainForexAnalysis(analysis);
-    res.json(explanation);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
+// Forex endpoints are retired in favour of Indian market focus
+app.get(['/api/forex/*', '/api/forex'], (_req: Request, res: Response) => {
+  res.status(404).json({ error: 'MARKET_NOT_SUPPORTED', message: 'Forex market endpoints have been retired. System is configured for Indian markets only.' });
 });
 
 
@@ -2143,6 +1848,14 @@ app.delete('/api/notes/:id', operatorAuthRequired, async (req: Request, res: Res
 });
 
 // 5. Indian Equity Endpoints
+const INDIA_UNDERLYINGS_CACHE_TTL_MS = 60_000;
+let indiaUnderlyingsCache: { payload: any[]; expiresAt: number } | null = null;
+let indiaUnderlyingsInFlight: Promise<any[]> | null = null;
+
+const CANDLE_CACHE_TTL_MS = 30_000;
+const candleCache = new Map<string, { payload: any[]; expiresAt: number }>();
+const candleInFlight = new Map<string, Promise<any[]>>();
+
 app.get('/api/india/underlyings', async (_req: Request, res: Response) => {
   try {
     const now = Date.now();
@@ -2215,7 +1928,7 @@ app.get('/api/india/analysis/:symbol', async (req: Request, res: Response) => {
   }
 });
 
-// Universal candles endpoint supporting both Forex (EUR/USD, EUR%2FUSD) and Indian underlyings (NIFTY, etc.)
+// Universal candles endpoint for Indian underlyings (NIFTY, BANKNIFTY, etc.)
 app.get(['/api/candles/:symbol', '/api/candles/:part1/:part2'], async (req: Request, res: Response) => {
   try {
     let symbol = req.params.symbol;
@@ -2227,15 +1940,12 @@ app.get(['/api/candles/:symbol', '/api/candles/:part1/:part2'], async (req: Requ
     }
 
     symbol = decodeURIComponent(symbol).toUpperCase().trim();
-    const isForex = symbol.includes('/') || FOREX_PAIRS.some(p => p.symbol.toUpperCase() === symbol);
-    const tf = isForex
-      ? ((req.query.tf as ForexTimeframe) || '15M')
-      : String(req.query.tf || '15m');
+    const tf = String(req.query.tf || '15m');
     const limit = req.query.limit
       ? Math.min(Math.max(parseInt(req.query.limit as string, 10), 10), 500)
       : 80;
 
-    const cacheKey = `${isForex ? 'FX' : 'IN'}|${symbol}|${tf}|${limit}`;
+    const cacheKey = `IN|${symbol}|${tf}|${limit}`;
     const cached = candleCache.get(cacheKey);
     if (cached && Date.now() < cached.expiresAt) {
       return res.json(cached.payload);
@@ -2247,11 +1957,6 @@ app.get(['/api/candles/:symbol', '/api/candles/:part1/:part2'], async (req: Requ
     }
 
     const promise = (async () => {
-      if (isForex) {
-        const candles = await getLiveAnchoredCandles(symbol, tf as ForexTimeframe, limit);
-        return candles;
-      }
-
       const adapter = brokerRegistry.getAdapter('FIVE_PAISA', 'LIVE');
       if (!adapter.getHistoricalCandles) {
         throw new BrokerError('UNAVAILABLE', 'Authoritative 5paisa historical market-data capability is unavailable.', 'FIVE_PAISA', 'LIVE');
@@ -2355,17 +2060,14 @@ app.get(['/api/signals', '/api/signals/all'], async (req: Request, res: Response
   }
 });
 
-// 7b. Indian Market News & Prediction — hard-gated to the authoritative Indian session state.
+// 7b. Indian Market News & Prediction
 app.get('/api/india/news', async (req: Request, res: Response) => {
   try {
-    const session = getIndianSessionState();
-    if (!session.isOpen) {
-      const snapshot = await fetchIndianMarketNews({ forceRefresh: false });
-      return res.json(snapshot);
-    }
-
     const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
-    const marketData = await scannerService.getIndianMarketScanner();
+    let marketData: any[] = [];
+    try {
+      marketData = await scannerService.getIndianMarketScanner();
+    } catch {}
     const snapshot = await fetchIndianMarketNews({ forceRefresh, marketData });
     res.status(snapshot.status === 'UNAVAILABLE' ? 503 : 200).json(snapshot);
   } catch (err: any) {
@@ -2376,30 +2078,12 @@ app.get('/api/india/news', async (req: Request, res: Response) => {
   }
 });
 
-// 8. Live Forex News
-app.get('/api/forex/news', async (req: Request, res: Response) => {
-  try {
-    const configuredPairs = getSystemConfig().autoLiveForexPairs;
-    const requestedPairs = typeof req.query.pairs === 'string'
-      ? req.query.pairs
-        .split(',')
-        .map(value => value.trim())
-        .filter(Boolean)
-      : configuredPairs;
-
-    const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
-    const news = await fetchLiveForexNews({
-      pairs: requestedPairs,
-      forceRefresh
-    });
-
-    res.status(news.status === 'UNAVAILABLE' ? 503 : 200).json(news);
-  } catch (err: any) {
-    res.status(503).json({
-      error: 'LIVE_FOREX_NEWS_UNAVAILABLE',
-      message: err?.message || 'Live Forex news is unavailable.'
-    });
-  }
+// 8. Live Forex News (Retired)
+app.get('/api/forex/news', async (_req: Request, res: Response) => {
+  res.status(404).json({
+    error: 'MARKET_NOT_SUPPORTED',
+    message: 'Forex news endpoint has been retired. System is configured for Indian markets only.'
+  });
 });
 
 // 8b. News Service Provider Status
@@ -3224,10 +2908,9 @@ async function startServer() {
     });
   }
 
-  // Goldcrest is a private/local application; loopback is the safe default.
-  // Remote binding must be explicitly configured via HOST.
-  const host = process.env.HOST || '127.0.0.1';
-  const localDevelopmentHost = ['127.0.0.1', 'localhost', '::1'].includes(String(host).trim().toLowerCase());
+  // Dev server binds to 0.0.0.0 for accessible container networking.
+  const host = process.env.HOST || '0.0.0.0';
+  const localDevelopmentHost = ['0.0.0.0', '127.0.0.1', 'localhost', '::1'].includes(String(host).trim().toLowerCase());
   if (process.env.NODE_ENV !== 'production') {
     process.env.GOLDCREST_LOCAL_DEVELOPMENT = localDevelopmentHost ? 'true' : 'false';
   }

@@ -110,9 +110,9 @@ export const TradingOperationsDashboard: React.FC<TradingOperationsDashboardProp
             <Wallet className="w-4 h-4 text-sky-400" />
           </div>
           <div className="text-lg font-bold text-white mt-2">
-            {Array.isArray(status?.brokers) ? status.brokers.filter((b: any) => b?.connected && b?.environment === 'LIVE').length : 0} / 2
+            {Array.isArray(status?.brokers) ? status.brokers.filter((b: any) => b?.connected && b?.environment === 'LIVE').length : 0} / 1
           </div>
-          <div className="text-slate-500 mt-1">cTrader + 5paisa</div>
+          <div className="text-slate-500 mt-1">5paisa LIVE API</div>
         </div>
       </div>
 

@@ -41,11 +41,16 @@ export function evaluateSystemConfigIntegrity(config: SystemConfig): ConfigInteg
   check('strikeDepth', positiveInteger(config.strikeDepth));
   check('maxTradeValueForexUsd', positiveFinite(config.maxTradeValueForexUsd));
   check('maxTradeValueIndianInr', positiveFinite(config.maxTradeValueIndianInr));
+  check('smallTradeBudgetInr', positiveFinite(config.smallTradeBudgetInr));
+  check('smallTradeBudgetEnabled', typeof config.smallTradeBudgetEnabled === 'boolean');
+  check('niftyFnoTestingMode', typeof config.niftyFnoTestingMode === 'boolean');
+  check('customNiftyBudgetEnabled', typeof config.customNiftyBudgetEnabled === 'boolean');
+  check('niftyMaxTradeValues', !config.niftyMaxTradeValues || (typeof config.niftyMaxTradeValues === 'object' && Object.values(config.niftyMaxTradeValues).every(v => typeof v === 'number' && Number.isFinite(v) && v > 0)));
   check('autoLiveMinSignalScore', nonNegativeFinite(config.autoLiveMinSignalScore) && config.autoLiveMinSignalScore <= 100);
   check('autoLiveMaxTradesPerPair', positiveInteger(config.autoLiveMaxTradesPerPair));
   check('forexStopLossPips', positiveFinite(config.forexStopLossPips));
   check('forexTakeProfitPips', positiveFinite(config.forexTakeProfitPips));
-  check('autoLiveForexPairs', Array.isArray(config.autoLiveForexPairs) && config.autoLiveForexPairs.length > 0 && config.autoLiveForexPairs.every(pair => typeof pair === 'string' && /^[A-Z]{3}\/[A-Z]{3}$/.test(pair)));
+  check('autoLiveForexPairs', Array.isArray(config.autoLiveForexPairs));
   check('autoLiveIndianUnderlyings', Array.isArray(config.autoLiveIndianUnderlyings) && config.autoLiveIndianUnderlyings.length > 0 && config.autoLiveIndianUnderlyings.every(symbol => typeof symbol === 'string' && /^[A-Z0-9._-]+$/.test(symbol)));
   check('financialDisclaimer', typeof config.financialDisclaimer === 'string' && config.financialDisclaimer.trim().length > 0);
 

@@ -204,15 +204,24 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
       body: JSON.stringify(payload)
     });
 
+    if (res.status === 429) {
+      throw new Error('RATE_LIMITED: 5paisa OpenAPI is rate-limiting login attempts (HTTP 429). Please wait 30–60 seconds before submitting a new TOTP code.');
+    }
+
     if (!res.ok) {
       throw new Error(`5paisa TOTPLogin HTTP ${res.status}: ${res.statusText}`);
     }
 
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
+    const message = data?.body?.Message || data?.Message || '';
+    if (data?.body?.Status === false && (String(message).toUpperCase().includes('RATE') || String(message).toUpperCase().includes('LIMIT') || String(message).toUpperCase().includes('TOO MANY'))) {
+      throw new Error(`RATE_LIMITED: 5paisa API rate limited: ${message}`);
+    }
+
     if (data?.body?.RequestToken) {
       return await this.exchangeRequestToken(data.body.RequestToken);
     }
-    throw new Error(data?.body?.Message || 'Failed to obtain RequestToken from 5paisa TOTPLogin');
+    throw new Error(message || 'Failed to obtain RequestToken from 5paisa TOTPLogin');
   }
 
   /**

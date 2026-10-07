@@ -29,12 +29,10 @@ const nav = [
 export const GlobalAppShell: React.FC<GlobalAppShellProps> = ({
   activeTab, setActiveTab, children, header, indianSession, indianUnderlyings
 }) => {
-  const [dashboardOpen, setDashboardOpen] = useState(true);
-  const isDashboard = activeTab === 'forex_terminal' || activeTab === 'market';
+  const isDashboard = activeTab === 'market';
 
-  const goDashboard = (tab: 'forex_terminal' | 'market') => {
-    setDashboardOpen(true);
-    setActiveTab(tab);
+  const goDashboard = () => {
+    setActiveTab('market');
   };
 
   const getIndex = (symbol: string) => {
@@ -59,10 +57,7 @@ export const GlobalAppShell: React.FC<GlobalAppShellProps> = ({
         <nav className="flex-1 overflow-y-auto px-3 pt-2 pb-3">
           <button
             type="button"
-            onClick={() => {
-              setDashboardOpen(v => !v);
-              if (!isDashboard) setActiveTab('forex_terminal');
-            }}
+            onClick={goDashboard}
             className={`w-full h-[40px] flex items-center gap-3 px-4 rounded-lg border transition text-left ${
               isDashboard
                 ? 'bg-[#092345] border-blue-700/70 text-white shadow-[0_0_18px_rgba(30,100,210,0.18)]'
@@ -70,32 +65,8 @@ export const GlobalAppShell: React.FC<GlobalAppShellProps> = ({
             }`}
           >
             <Grid2X2 className="w-[18px] h-[18px] text-blue-400" />
-            <span className="flex-1 text-sm font-semibold">Dashboard</span>
-            {dashboardOpen ? <ChevronDown className="w-4 h-4 text-slate-500" /> : <ChevronRight className="w-4 h-4 text-slate-500" />}
+            <span className="flex-1 text-sm font-semibold">NSE Dashboard</span>
           </button>
-
-          {dashboardOpen && (
-            <div className="mt-0 mb-1 pl-10 pr-2 space-y-[-4px]">
-              <button
-                type="button"
-                onClick={() => goDashboard('forex_terminal')}
-                className={`w-full py-0.5 text-left text-sm transition ${
-                  activeTab === 'forex_terminal' ? 'text-white font-semibold' : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <span className="mr-2 text-slate-600">-</span>Forex
-              </button>
-              <button
-                type="button"
-                onClick={() => goDashboard('market')}
-                className={`w-full py-0.5 text-left text-sm transition ${
-                  activeTab === 'market' ? 'text-white font-semibold' : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <span className="mr-2 text-slate-600">-</span>NSE
-              </button>
-            </div>
-          )}
 
           <div className="space-y-[-4px]">
             {nav.map(item => {

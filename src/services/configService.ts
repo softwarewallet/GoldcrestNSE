@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { FOREX_PAIRS } from '../markets/forex/instruments';
 import { evaluateSystemConfigIntegrity } from './configIntegrityService';
 
 export interface SystemConfig {
@@ -9,7 +8,7 @@ export interface SystemConfig {
   dataStatus: 'LIVE' | 'DELAYED' | 'STALE' | 'UNAVAILABLE';
   modelStatus: string;
   researchStatus: 'CLOSED';
-  cTraderApiMode: 'LIVE' | 'DEMO';
+  cTraderApiMode?: 'LIVE' | 'DEMO';
   selectedCtraderAccountId?: string;
   selectedCtraderAccountCurrency?: string;
   selectedCtraderAccountLabel?: string;
@@ -24,6 +23,11 @@ export interface SystemConfig {
   strikeDepth: number;
   maxTradeValueForexUsd: number;
   maxTradeValueIndianInr: number;
+  smallTradeBudgetInr: number;
+  smallTradeBudgetEnabled: boolean;
+  niftyFnoTestingMode: boolean;
+  customNiftyBudgetEnabled: boolean;
+  niftyMaxTradeValues: Record<string, number>;
   autoLiveMinSignalScore: number;
   autoLiveMaxTradesPerPair: number;
   forexStopLossPips: number;
@@ -62,6 +66,11 @@ const PERSISTED_KEYS: readonly (keyof SystemConfig)[] = [
   'strikeDepth',
   'maxTradeValueForexUsd',
   'maxTradeValueIndianInr',
+  'smallTradeBudgetInr',
+  'smallTradeBudgetEnabled',
+  'niftyFnoTestingMode',
+  'customNiftyBudgetEnabled',
+  'niftyMaxTradeValues',
   'autoLiveMinSignalScore',
   'autoLiveMaxTradesPerPair',
   'forexStopLossPips',
@@ -89,17 +98,25 @@ let activeConfig: SystemConfig = {
   strikeDepth: 7,
   maxTradeValueForexUsd: 100000,
   maxTradeValueIndianInr: 1000000,
+  smallTradeBudgetInr: 20,
+  smallTradeBudgetEnabled: true,
+  niftyFnoTestingMode: true,
+  customNiftyBudgetEnabled: true,
+  niftyMaxTradeValues: {
+    NIFTY: 20,
+    BANKNIFTY: 20,
+    FINNIFTY: 20,
+    MIDCPNIFTY: 20,
+    SENSEX: 20
+  },
   autoLiveMinSignalScore: 75,
   autoLiveMaxTradesPerPair: 4,
   forexStopLossPips: 20,
   forexTakeProfitPips: 40,
-  // If the operator has not persisted a working-universe selection yet,
-  // Auto Live evaluates the complete supported Forex universe rather than
-  // silently falling back to the old five-pair subset.
-  autoLiveForexPairs: FOREX_PAIRS.map(pair => pair.symbol),
+  autoLiveForexPairs: [],
   autoLiveIndianUnderlyings: ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX'],
   financialDisclaimer:
-    'Trading in Forex and derivatives involves substantial risk of loss. Model outputs, signals, probabilities and technical analysis are estimates for informational and analytical purposes only and are not financial advice, guarantees, or assurances of future performance.'
+    'Trading in Indian equity and derivatives involves substantial risk of loss. Model outputs, signals, probabilities and technical analysis are estimates for informational and analytical purposes only and are not financial advice, guarantees, or assurances of future performance.'
 };
 
 let diskConfigLoaded = false;
@@ -120,6 +137,22 @@ function sanitizePersistedConfig(input: unknown): Partial<SystemConfig> {
   const output: Partial<SystemConfig> = {};
   for (const key of PERSISTED_KEYS) {
     const value = input[key];
+
+    if (key === 'niftyMaxTradeValues' && isRecord(value)) {
+      const sanitizedRecord: Record<string, number> = {};
+      for (const [k, v] of Object.entries(value)) {
+        if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
+          sanitizedRecord[k.toUpperCase()] = v;
+        }
+      }
+      (output as any)[key] = sanitizedRecord;
+      continue;
+    }
+
+    if (typeof value === 'boolean') {
+      (output as any)[key] = value;
+      continue;
+    }
 
     if (typeof value === 'number') {
       if (Number.isFinite(value)) (output as any)[key] = value;
@@ -244,5 +277,30 @@ export function updateSystemConfig(updates: Partial<SystemConfig>): SystemConfig
 
 export function getCTraderApiMode(): 'LIVE' | 'DEMO' {
   loadPersistedSystemConfig();
-  return activeConfig.cTraderApiMode;
+  return activeConfig.cTraderApiMode || 'DEMO';
 }
+
+export function extractBaseUnderlying(symbol: string): string {
+  const clean = String(symbol || '').toUpperCase().replace(/^NSE:|^BSE:/, '').trim();
+  if (clean.includes('BANKNIFTY') || clean.includes('NIFTYBANK')) return 'BANKNIFTY';
+  if (clean.includes('FINNIFTY') || clean.includes('NIFTYFIN')) return 'FINNIFTY';
+  if (clean.includes('MIDCPNIFTY') || clean.includes('MIDCAP') || clean.includes('NIFTYMID')) return 'MIDCPNIFTY';
+  if (clean.includes('SENSEX')) return 'SENSEX';
+  if (clean.includes('NIFTY')) return 'NIFTY';
+  return clean.split(/[_ -]/)[0] || clean;
+}
+
+export function resolveInstrumentMaxTradeValue(symbol: string, config: SystemConfig = getSystemConfig()): number {
+  const base = extractBaseUnderlying(symbol);
+  if (config.customNiftyBudgetEnabled && config.niftyMaxTradeValues && typeof config.niftyMaxTradeValues === 'object') {
+    const val = Number(config.niftyMaxTradeValues[base]);
+    if (Number.isFinite(val) && val > 0) {
+      return val;
+    }
+  }
+  if (config.smallTradeBudgetEnabled && Number.isFinite(config.smallTradeBudgetInr) && config.smallTradeBudgetInr > 0) {
+    return config.smallTradeBudgetInr;
+  }
+  return config.maxTradeValueIndianInr || 1000000;
+}
+

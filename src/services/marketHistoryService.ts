@@ -385,7 +385,7 @@ async function syncPair(symbol: string, forceFull = false): Promise<MarketHistor
   });
 
   try {
-    const adapter = brokerRegistry.getAdapter('CTRADER', 'LIVE');
+    const adapter = brokerRegistry.getAdapter('FIVE_PAISA', 'LIVE');
     if (!adapter.getHistoricalCandles) {
       throw new Error('Authoritative cTrader historical market-data capability is unavailable.');
     }

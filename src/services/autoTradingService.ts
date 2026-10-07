@@ -280,7 +280,7 @@ class AutoTradingService {
   }
 
   private async getAuthoritativePositionCapacity(): Promise<{ current: number; max: number; available: number }> {
-    const adapter = brokerRegistry.getAdapter('CTRADER', 'LIVE');
+    const adapter = brokerRegistry.getAdapter('FIVE_PAISA', 'LIVE');
     const positions = await adapter.getPositions();
     const current = Array.isArray(positions) ? positions.length : 0;
     const max = this.getConfiguredMaxOpenPositions();
@@ -605,7 +605,7 @@ class AutoTradingService {
     );
 
     try {
-      const adapter = brokerRegistry.getAdapter('CTRADER', 'LIVE');
+      const adapter = brokerRegistry.getAdapter('FIVE_PAISA', 'LIVE');
       const positions = await adapter.getPositions();
       const activePositionsCount = Array.isArray(positions) ? positions.length : 0;
 
@@ -715,16 +715,16 @@ class AutoTradingService {
     this.preOpenStatus = 'RUNNING';
 
     try {
-      const cTraderAdapter = brokerRegistry.getAdapter('CTRADER', 'LIVE');
-      const cTraderPreflight = await validateAutoLiveCTraderConnection(cTraderAdapter);
-      liveRuntimeLog(cTraderPreflight.ok ? 'INFO' : 'WARN', 'AUTO_TRADING_CTRADER_PREFLIGHT', {
-        ok: cTraderPreflight.ok, apiMode:cTraderPreflight.result.apiMode, apiEndpoint:cTraderPreflight.result.apiEndpoint,
-        account:cTraderPreflight.result.account, accountType:cTraderPreflight.result.accountType, error:cTraderPreflight.result.error
+      const brokerAdapter = brokerRegistry.getAdapter('FIVE_PAISA', 'LIVE');
+      const brokerPreflight = await validateAutoLiveCTraderConnection(brokerAdapter);
+      liveRuntimeLog(brokerPreflight.ok ? 'INFO' : 'WARN', 'AUTO_TRADING_BROKER_PREFLIGHT', {
+        ok: brokerPreflight.ok, apiMode: brokerPreflight.result.apiMode, apiEndpoint: brokerPreflight.result.apiEndpoint,
+        account: brokerPreflight.result.account, accountType: brokerPreflight.result.accountType, error: brokerPreflight.result.error
       });
-      if (!cTraderPreflight.ok) {
-        this.state='BLOCKED'; this.lastCycleResult=cTraderPreflight.message;
-        this.setExecutionStatus({stage:'REJECTED', pair:null, side:null, signalId:null, message:cTraderPreflight.message});
-        liveRuntimeLog('WARN','AUTO_TRADING_BLOCKED_CTRADER_PREFLIGHT',{reason:cTraderPreflight.message,apiMode:cTraderPreflight.result.apiMode,apiEndpoint:cTraderPreflight.result.apiEndpoint});
+      if (!brokerPreflight.ok) {
+        this.state = 'BLOCKED'; this.lastCycleResult = brokerPreflight.message;
+        this.setExecutionStatus({ stage: 'REJECTED', pair: null, side: null, signalId: null, message: brokerPreflight.message });
+        liveRuntimeLog('WARN', 'AUTO_TRADING_BLOCKED_BROKER_PREFLIGHT', { reason: brokerPreflight.message, apiMode: brokerPreflight.result.apiMode, apiEndpoint: brokerPreflight.result.apiEndpoint });
         return;
       }
 
@@ -1159,7 +1159,7 @@ return;
 return;
       }
 
-      const adapter = brokerRegistry.getAdapter('CTRADER', 'LIVE');
+      const adapter = brokerRegistry.getAdapter('FIVE_PAISA', 'LIVE');
 
       // Re-check the authoritative account position count inside the serialized
       // execution lock. Another pair may have filled the final available slot

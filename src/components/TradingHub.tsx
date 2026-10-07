@@ -18,10 +18,12 @@ import {
   TrendingUp,
   TrendingDown,
   Target,
+  Zap,
   X
 } from 'lucide-react';
 import { TradingEnvironment, BrokerType } from '../brokers/types';
 import { OptionsTradingPanel } from './OptionsTradingPanel';
+import { SmallTradeBudgetModal } from './SmallTradeBudgetModal';
 import { AUTO_LIVE_POSITION_REFRESH_INTERVAL_MS, isVisibleAutoLiveSignal } from '../services/autoLiveTradePolicy';
 
 interface TradingHubProps {
@@ -357,18 +359,18 @@ interface ExecutionReconciliationDiagnostic {
 
 export const TradingHub: React.FC<TradingHubProps> = ({ 
   environment, 
-  selectedBroker = 'cTrader', 
-  maskedAccount = 'ID-8849-LIVE', 
-  balance = 148500.00, 
-  currency = 'USD', 
+  selectedBroker = '5paisa', 
+  maskedAccount = '****', 
+  balance = 0, 
+  currency = 'INR', 
   isEmergencyHalted 
 }) => {
   // Manual Order Form States
-  const [market, setMarket] = useState<string>('FOREX');
-  const [symbol, setSymbol] = useState<string>('EUR/USD');
+  const [market, setMarket] = useState<string>('INDIAN_EQUITY');
+  const [symbol, setSymbol] = useState<string>('NIFTY');
   const [side, setSide] = useState<'BUY' | 'SELL'>('BUY');
   const [orderType, setOrderType] = useState<'MARKET' | 'LIMIT'>('MARKET');
-  const [quantity, setQuantity] = useState<number>(10000);
+  const [quantity, setQuantity] = useState<number>(50);
   const [price, setPrice] = useState<string>('');
   const [stopLoss, setStopLoss] = useState<string>('');
   const [takeProfit, setTakeProfit] = useState<string>('');
@@ -473,6 +475,9 @@ export const TradingHub: React.FC<TradingHubProps> = ({
   const [dailyLossLimitPct, setDailyLossLimitPct] = useState<number>(3);
   const [dailyLossSaving, setDailyLossSaving] = useState<boolean>(false);
   const [dailyLossSaveMessage, setDailyLossSaveMessage] = useState<string | null>(null);
+  const [showBudgetModal, setShowBudgetModal] = useState<boolean>(false);
+  const [smallTradeBudget, setSmallTradeBudget] = useState<number>(20);
+  const [smallTradeBudgetEnabled, setSmallTradeBudgetEnabled] = useState<boolean>(true);
 
   // Helper to append telemetry console logs
   const addLog = useCallback((type: 'info' | 'success' | 'error' | 'warning' | 'nlp', message: string) => {
@@ -824,8 +829,16 @@ export const TradingHub: React.FC<TradingHubProps> = ({
         if (mounted && Number.isFinite(configuredLimit) && configuredLimit > 0) {
           setDailyLossLimitPct(configuredLimit);
         }
+        if (mounted && config) {
+          if (config.smallTradeBudgetInr !== undefined && Number(config.smallTradeBudgetInr) > 0) {
+            setSmallTradeBudget(Number(config.smallTradeBudgetInr));
+          }
+          if (config.smallTradeBudgetEnabled !== undefined) {
+            setSmallTradeBudgetEnabled(Boolean(config.smallTradeBudgetEnabled));
+          }
+        }
       })
-      .catch((err) => console.warn('Failed to load persisted daily loss limit:', err))
+      .catch((err) => console.warn('Failed to load persisted config in TradingHub:', err))
     return () => { mounted = false; };
   }, [safeParseJson]);
 
@@ -877,11 +890,8 @@ export const TradingHub: React.FC<TradingHubProps> = ({
   // Handle market change configuration
   const handleMarketChange = (newMarket: string) => {
     setMarket(newMarket);
-    if (newMarket === 'FOREX') {
-      setSymbol('EUR/USD');
-      setQuantity(10000);
-    } else if (newMarket === 'INDIAN_EQUITY') {
-      setSymbol('RELIANCE');
+    if (newMarket === 'INDIAN_EQUITY') {
+      setSymbol('NIFTY');
       setQuantity(50);
     } else {
       setSymbol('NIFTY');
@@ -1151,13 +1161,26 @@ export const TradingHub: React.FC<TradingHubProps> = ({
             <div className="text-white font-bold text-base">Auto Live Trading Cockpit</div>
             <div className="text-slate-500 text-xs font-mono mt-1">Operational view for live execution only.</div>
           </div>
-          <div className="flex flex-wrap gap-2 font-mono text-[11px]">
+          <div className="flex flex-wrap items-center gap-2 font-mono text-[11px]">
+            <button
+              type="button"
+              onClick={() => setShowBudgetModal(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-500/40 bg-amber-950/30 hover:bg-amber-900/40 text-amber-300 font-mono font-bold text-xs transition shadow-md cursor-pointer"
+              title="Configure Small Amount Trade Budget (₹10 - ₹20 INR) for Nifty F&O Testing"
+            >
+              <Zap className="w-3.5 h-3.5 text-amber-400" />
+              <span>Small Budget: ₹{smallTradeBudget} INR</span>
+              <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${smallTradeBudgetEnabled ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'bg-slate-800 text-slate-400'}`}>
+                {smallTradeBudgetEnabled ? 'ENFORCED' : 'OFF'}
+              </span>
+            </button>
             <span className={"px-3 py-1 rounded-lg border font-bold " +
               (autoStatus?.state === 'RUNNING' ? "text-emerald-300 bg-emerald-950/60 border-emerald-800" :
                autoStatus?.state === 'BLOCKED' ? "text-rose-300 bg-rose-950/60 border-rose-800" :
                "text-amber-300 bg-amber-950/60 border-amber-800")}>
               AUTO LIVE: {autoStatus?.state || 'LOADING'}
-            </span>            <span className="px-3 py-1 rounded-lg border border-slate-700 bg-slate-950 text-slate-300">{selectedBroker} · LIVE</span>
+            </span>
+            <span className="px-3 py-1 rounded-lg border border-slate-700 bg-slate-950 text-slate-300">{selectedBroker} · LIVE</span>
           </div>
         </div>
       </div>
@@ -1939,9 +1962,46 @@ export const TradingHub: React.FC<TradingHubProps> = ({
             <div className="flex justify-between"><span className="text-slate-500">Emergency Halt</span><span className={isEmergencyHalted ? "text-rose-400" : "text-emerald-400"}>{isEmergencyHalted ? 'ACTIVE' : 'READY'}</span></div>
             {autoStatusError && <div className="text-rose-300 border border-rose-900 bg-rose-950/30 rounded p-2">{autoStatusError}</div>}
           </div></div>
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-4">
+            <div>
+              <div className="text-sm font-bold text-white font-mono flex items-center justify-between">
+                <span>NIFTY F&amp;O Small Trade Budget</span>
+                <span className={`px-2 py-0.5 rounded text-[10px] ${smallTradeBudgetEnabled ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'bg-slate-800 text-slate-400'}`}>
+                  {smallTradeBudgetEnabled ? 'ACTIVE CAP' : 'OFF'}
+                </span>
+              </div>
+              <div className="text-[10px] text-slate-500 mt-1">Configured for 10-20 INR testing on Indian NIFTY F&amp;O instruments.</div>
+            </div>
+            <div className="rounded-lg border border-amber-500/30 bg-amber-950/20 p-3.5 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-bold text-amber-300 font-mono">Current Limit: ₹{smallTradeBudget} INR / trade</div>
+                  <div className="text-[10px] text-slate-400 mt-0.5">Caps total exposure per order to prevent unintended large executions during testing.</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowBudgetModal(true)}
+                  className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-mono font-bold transition cursor-pointer shadow-md"
+                >
+                  Configure Budget
+                </button>
+              </div>
+            </div>
+          </div>
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-4"><div className="text-sm font-bold text-white font-mono mb-3">Secondary Tools</div><div className="text-xs text-slate-500">Detailed diagnostics, configuration and historical information should be kept in dedicated application pages rather than the default Auto Live cockpit.</div></div>
         </div>
       )}
+
+      {/* Small Trade Budget Configuration Modal */}
+      <SmallTradeBudgetModal
+        isOpen={showBudgetModal}
+        onClose={() => setShowBudgetModal(false)}
+        onSaved={(budget, enabled) => {
+          setSmallTradeBudget(budget);
+          setSmallTradeBudgetEnabled(enabled);
+          addLog('success', `[BUDGET] Small Amount Trade Budget updated to ₹${budget} INR (${enabled ? 'Enforced' : 'Disabled'})`);
+        }}
+      />
     </div>
   );
 

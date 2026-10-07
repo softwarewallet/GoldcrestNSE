@@ -5,16 +5,14 @@ import {
   ConnectionTestResult,
   BrokerCredentialStatus
 } from './types';
-import { CTraderLiveAdapter } from './adapters/cTrader/CTraderLiveAdapter';
 import { FivePaisaLiveAdapter } from './adapters/fivepaisa/FivePaisaLiveAdapter';
 import { FivePaisaBrokerAdapter } from './adapters/fivepaisa/FivePaisaBrokerAdapter';
 import { BrokerError } from './errors';
 
 export class BrokerRegistry {
   private activeEnvironment: TradingEnvironment = 'LIVE';
-  // Broker selection is retained only for backwards compatibility. Market routing
-  // is authoritative and automatically selects the compatible live broker.
-  private selectedBroker: BrokerType = 'CTRADER';
+  // Broker selection is set to FIVE_PAISA for Indian market trading.
+  private selectedBroker: BrokerType = 'FIVE_PAISA';
 
   private adapters: Map<string, BrokerAdapter> = new Map();
   private isInitialized: boolean = false;
@@ -28,10 +26,8 @@ export class BrokerRegistry {
   }
 
   private initializeAdapters(): void {
-    // LIVE_ONLY: only authoritative live broker adapters are registered.
-    const ctraderLive = new CTraderLiveAdapter();
+    // Dedicated Indian market trading via 5paisa LIVE API
     const fivePaisaLive = new FivePaisaLiveAdapter();
-    this.adapters.set('CTRADER_LIVE', ctraderLive);
     this.adapters.set('FIVE_PAISA_LIVE', fivePaisaLive);
   }
 
@@ -51,9 +47,8 @@ export class BrokerRegistry {
   }
 
   setSelectedBroker(broker: BrokerType): void {
-    // Kept for API compatibility. It must not disable the other market broker.
-    if (!['CTRADER', 'FIVE_PAISA'].includes(broker)) {
-      throw new Error('Invalid broker. Allowed: CTRADER, FIVE_PAISA');
+    if (broker !== 'FIVE_PAISA') {
+      throw new Error('Invalid broker. Goldcrest operates exclusively with FIVE_PAISA for Indian market.');
     }
     this.selectedBroker = broker;
   }
@@ -72,7 +67,7 @@ export class BrokerRegistry {
     if (!adapter) {
       throw new BrokerError(
         'UNKNOWN_ERROR',
-        `No live adapter registered for ${targetBroker}`,
+        `No live adapter registered for ${targetBroker}. Goldcrest is configured for Indian markets via 5paisa.`,
         targetBroker,
         'LIVE'
       );
@@ -82,15 +77,10 @@ export class BrokerRegistry {
 
   /**
    * Resolve the authoritative live broker from the requested market.
-   * FOREX -> cTrader
    * Indian equity/futures/options -> 5paisa
    */
   getAdapterForMarket(market: string): BrokerAdapter {
     this.ensureInitialized();
-
-    if (market === 'FOREX') {
-      return this.getAdapter('CTRADER', 'LIVE');
-    }
 
     if (market === 'INDIAN_EQUITY' || market === 'INDIAN_FUTURES' || market === 'INDIAN_OPTIONS') {
       return this.getAdapter('FIVE_PAISA', 'LIVE');
@@ -98,20 +88,19 @@ export class BrokerRegistry {
 
     throw new BrokerError(
       'INVALID_SYMBOL',
-      `No live broker route is configured for market ${market}`,
-      'CTRADER',
+      `Market ${market} is not supported. Goldcrest is configured exclusively for Indian markets via 5paisa.`,
+      'FIVE_PAISA',
       'LIVE'
     );
   }
 
   /**
-   * Both live broker adapters are active simultaneously.
+   * Active live broker adapters.
    * This is the canonical source for dashboard/account aggregation.
    */
   getActiveLiveAdapters(): BrokerAdapter[] {
     this.ensureInitialized();
     return [
-      this.getAdapter('CTRADER', 'LIVE'),
       this.getAdapter('FIVE_PAISA', 'LIVE')
     ];
   }
@@ -130,14 +119,6 @@ export class BrokerRegistry {
   }
 
   validateMarketCompatibility(market: string, broker: BrokerType): { compatible: boolean; reason?: string } {
-    if (broker === 'CTRADER') {
-      if (market === 'FOREX') return { compatible: true };
-      return {
-        compatible: false,
-        reason: `cTrader broker only supports FOREX market. Cannot route ${market} to cTrader.`
-      };
-    }
-
     if (broker === 'FIVE_PAISA') {
       if (market === 'INDIAN_EQUITY' || market === 'INDIAN_OPTIONS' || market === 'INDIAN_FUTURES') {
         return { compatible: true };
@@ -148,31 +129,20 @@ export class BrokerRegistry {
       };
     }
 
-    return { compatible: false, reason: `Unknown broker ${broker}` };
+    return { compatible: false, reason: `Unknown or unsupported broker ${broker}. Goldcrest operates for Indian markets.` };
   }
 
-  async testBrokerConnection(broker: BrokerType, environment: TradingEnvironment): Promise<ConnectionTestResult> {
+  async testBrokerConnection(broker: BrokerType = 'FIVE_PAISA', environment: TradingEnvironment = 'LIVE'): Promise<ConnectionTestResult> {
     const adapter = this.getAdapter(broker, environment);
     return adapter.testConnection();
   }
 
   getCredentialStatuses(): BrokerCredentialStatus[] {
     this.ensureInitialized();
-    const ctraderLive = this.adapters.get('CTRADER_LIVE') as CTraderLiveAdapter;
     const fivePaisaLive = this.adapters.get('FIVE_PAISA_LIVE') as FivePaisaLiveAdapter;
-
-    const cLiveStatus = ctraderLive.getConfigStatus();
     const fpLiveStatus = fivePaisaLive.getConfigStatus();
 
     return [
-      {
-        broker: 'CTRADER',
-        environment: 'LIVE',
-        configured: cLiveStatus.configured,
-        maskedAccountId: cLiveStatus.maskedAccountId,
-        maskedClientId: cLiveStatus.maskedClientId,
-        status: cLiveStatus.configured ? 'CONNECTED' : 'DISCONNECTED'
-      },
       {
         broker: 'FIVE_PAISA',
         environment: 'LIVE',
@@ -188,12 +158,9 @@ export class BrokerRegistry {
     ];
   }
 
-
   updateLiveCredentials(broker: BrokerType, creds: Record<string, any>): void {
     this.ensureInitialized();
-    if (broker === 'CTRADER') {
-      (this.adapters.get('CTRADER_LIVE') as CTraderLiveAdapter).updateCredentials(creds);
-    } else if (broker === 'FIVE_PAISA') {
+    if (broker === 'FIVE_PAISA') {
       (this.adapters.get('FIVE_PAISA_LIVE') as FivePaisaLiveAdapter).updateCredentials(creds);
     }
   }

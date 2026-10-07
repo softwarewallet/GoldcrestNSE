@@ -1,12 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Gauge, Plus, RefreshCw, Search, Settings2 } from 'lucide-react';
-import { Candle, IndianSessionState, ForexSessionState, TradingSignal } from '../markets/common/types';
+import { Candle, IndianSessionState, TradingSignal } from '../markets/common/types';
 import { BrokerType, TradingEnvironment } from '../brokers/types';
+import { MarketNews } from './MarketNews';
 
 interface TerminalDashboardProps {
   activeTab: string;
   setActiveTab: (tab: string) => void;
-  forexSessions: ForexSessionState;
   indianSession: IndianSessionState;
   selectedBroker: BrokerType;
   environment: TradingEnvironment;
@@ -289,6 +289,11 @@ export const TerminalDashboard: React.FC<TerminalDashboardProps> = ({
             <RiskRow label="Free Margin" value={nseAccount ? money(freeMargin, nseAccount.currency) : '—'} />
           </div>
         </div>
+      </section>
+
+      {/* Real-time Indian Market News & Sentiment Analysis */}
+      <section className="w-full">
+        <MarketNews maxArticles={30} />
       </section>
 
       <div className="flex items-center justify-between text-[10px] text-slate-600 font-mono px-1">

@@ -127,7 +127,7 @@ export async function recordLiveTradeResearchSignal(signal: LiveTradeResearchSig
     [
       signal.signalId,
       signal.symbol,
-      'CTRADER',
+      'FIVE_PAISA',
       'LIVE',
       signal.timestamp,
       Date.now(),

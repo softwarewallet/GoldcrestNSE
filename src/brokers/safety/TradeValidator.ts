@@ -3,6 +3,7 @@ import { BrokerError } from '../errors';
 import { brokerRegistry } from '../registry';
 import { killSwitch } from './KillSwitch';
 import { getSystemConfig } from '../../services/configService';
+import { getResolvedMaxTradeValueForNifty } from '../../services/niftyTradeLimits';
 
 export interface SignalValidationInput {
   signalId?: string;
@@ -206,7 +207,11 @@ export class TradeValidator {
     // pipeline must enforce the same limit even when it does not invoke the
     // HTTP broker route /api/brokers/order.
     const isForex = input.market === 'FOREX';
-    const maxTradeValue = isForex ? config.maxTradeValueForexUsd : config.maxTradeValueIndianInr;
+    let maxTradeValue = config.maxTradeValueForexUsd;
+    if (!isForex) {
+      const niftyResolution = getResolvedMaxTradeValueForNifty(input.symbol, config);
+      maxTradeValue = niftyResolution.maxTradeValueInr;
+    }
     const referencePrice = order.price && order.price > 0 ? order.price : input.currentPrice;
     const quoteCurrency = isForex ? input.symbol.replace(/[^A-Z]/g, '').slice(-3) : 'INR';
     const tradeValue = Number(order.quantity) * Number(referencePrice);
@@ -223,9 +228,12 @@ export class TradeValidator {
 
     if (maximumTradeValuePassed && tradeValue > maxTradeValue) {
       maximumTradeValuePassed = false;
+      const budgetReason = (!isForex && config.smallTradeBudgetEnabled)
+        ? `SMALL_AMOUNT_BUDGET_EXCEEDED: Trade value ₹${tradeValue.toFixed(2)} exceeds configured Small Amount testing budget of ₹${maxTradeValue.toFixed(2)} for ${input.symbol} F&O.`
+        : `MAX_TRADE_VALUE_EXCEEDED: Trade value ${tradeValue.toFixed(2)} ${isForex ? 'USD' : 'INR'} exceeds the configured maximum of ${maxTradeValue.toFixed(2)} ${isForex ? 'USD' : 'INR'} for ${isForex ? 'cTrader' : '5paisa'}.`;
       return {
         valid: false,
-        rejectionReason: `MAX_TRADE_VALUE_EXCEEDED: Trade value ${tradeValue.toFixed(2)} ${isForex ? 'USD' : 'INR'} exceeds the configured maximum of ${maxTradeValue.toFixed(2)} ${isForex ? 'USD' : 'INR'} for ${isForex ? 'cTrader' : '5paisa'}.`,
+        rejectionReason: budgetReason,
         checks: { ...checks, maximumTradeValuePassed }
       };
     }

@@ -1,13 +1,12 @@
 import React, { useState } from 'react';
-import { Globe, Activity, Layers, Search, TrendingUp, BarChart2 } from 'lucide-react';
-import { ForexDashboard } from './ForexDashboard';
+import { Activity, Layers, Search } from 'lucide-react';
 import { IndianMarketDashboard } from './IndianMarketDashboard';
 import { OptionsDashboard } from './OptionsDashboard';
 import { OptionsScannerView } from './OptionsScannerView';
 import { TradingSignal, Candle } from '../markets/common/types';
 
 interface MarketHubProps {
-  forexPairs: any[];
+  forexPairs?: any[];
   indianUnderlyings: any[];
   candlesMap: Record<string, Candle[]>;
   onSelectSignal: (signal: TradingSignal) => void;
@@ -17,7 +16,6 @@ interface MarketHubProps {
 }
 
 export const MarketHub: React.FC<MarketHubProps> = ({
-  forexPairs,
   indianUnderlyings,
   candlesMap,
   onSelectSignal,
@@ -25,7 +23,7 @@ export const MarketHub: React.FC<MarketHubProps> = ({
   initialOptionSymbol = 'NIFTY',
   environment = 'LIVE'
 }) => {
-  const [activeMarketTab, setActiveMarketTab] = useState<'forex' | 'indian' | 'options' | 'scanner'>('forex');
+  const [activeMarketTab, setActiveMarketTab] = useState<'indian' | 'options' | 'scanner'>('indian');
   const [selectedOptionSymbol, setSelectedOptionSymbol] = useState<string>(initialOptionSymbol);
 
   const handleSelectOptionChain = (symbol: string) => {
@@ -39,11 +37,10 @@ export const MarketHub: React.FC<MarketHubProps> = ({
       <div className="flex items-center justify-between bg-slate-900 border border-slate-800 rounded-xl p-2 px-3 shadow-md" style={{ marginBottom: '5px' }}>
         <div className="flex items-center space-x-1.5 overflow-x-auto text-xs font-mono">
           <span className="text-slate-500 font-semibold px-2 uppercase text-[10px] hidden sm:inline">
-            MARKET VIEW:
+            INDIAN MARKET:
           </span>
           {[
-            { id: 'forex', label: 'FOREX (G10)', icon: Globe },
-            { id: 'indian', label: 'INDIAN MARKET (NSE)', icon: Activity },
+            { id: 'indian', label: 'NSE INDICES & EQUITIES', icon: Activity },
             { id: 'options', label: 'OPTIONS CHAIN', icon: Layers },
             { id: 'scanner', label: 'OPTIONS SCANNER', icon: Search }
           ].map(tab => {
@@ -69,21 +66,11 @@ export const MarketHub: React.FC<MarketHubProps> = ({
 
         <div className="hidden md:flex items-center space-x-2 text-[11px] font-mono text-slate-400">
           <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-          <span>Multi-Timeframe Engine Active</span>
+          <span>NSE Realtime Data Feed</span>
         </div>
       </div>
 
       {/* Sub-view Rendering */}
-      {activeMarketTab === 'forex' && (
-        <ForexDashboard
-          pairs={forexPairs}
-          onSelectSignal={onSelectSignal}
-          candlesMap={candlesMap}
-          onEnsureCandles={onEnsureCandles}
-          environment={environment}
-        />
-      )}
-
       {activeMarketTab === 'indian' && (
         <IndianMarketDashboard
           underlyings={indianUnderlyings}

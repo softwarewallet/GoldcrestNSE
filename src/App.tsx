@@ -9,19 +9,16 @@ import { HistoryPage } from './components/HistoryPage';
 import { DatabaseExplorerPage } from './components/DatabaseExplorerPage';
 import { SettingsHub } from './components/SettingsHub';
 import { TerminalDashboard } from './components/TerminalDashboard';
-import { ForexTerminalDashboard } from './components/ForexTerminalDashboard';
 import { GlobalAppShell } from './components/GlobalAppShell';
 import { SignalModal } from './components/SignalModal';
 import { DiagnosticsModal } from './components/DiagnosticsModal';
 import { OrderConfirmationModal } from './components/OrderConfirmationModal';
-import { TradingSignal, Candle, ForexSessionState, IndianSessionState } from './markets/common/types';
-import { getForexSessionState, getIndianSessionState } from './markets/common/session';
+import { TradingSignal, Candle, IndianSessionState } from './markets/common/types';
+import { getIndianSessionState } from './markets/common/session';
 import { BrokerType, TradingEnvironment, OrderRequest } from './brokers/types';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<string>('forex_terminal');
-  const [forexPairs, setForexPairs] = useState<any[]>([]);
-  const [forexSessions, setForexSessions] = useState<ForexSessionState>(() => getForexSessionState(new Date()));
+  const [activeTab, setActiveTab] = useState<string>('market');
   const [indianUnderlyings, setIndianUnderlyings] = useState<any[]>([]);
   const [indianSession, setIndianSession] = useState<IndianSessionState>(() => getIndianSessionState(new Date()));
   const [signals, setSignals] = useState<TradingSignal[]>([]);
@@ -33,17 +30,14 @@ export default function App() {
   const [loadingInitial, setLoadingInitial] = useState<boolean>(true);
   const terminalRefreshInFlightRef = useRef<Promise<void> | null>(null);
 
-  // Broker Environment & Safety State
+  // Broker Environment & Safety State (5paisa LIVE for Indian Market)
   const [environment, setEnvironment] = useState<TradingEnvironment>('LIVE');
-  const [selectedBroker, setSelectedBroker] = useState<BrokerType>('CTRADER');
+  const [selectedBroker, setSelectedBroker] = useState<BrokerType>('FIVE_PAISA');
   const [maskedAccount, setMaskedAccount] = useState<string>('****');
-  const [currency, setCurrency] = useState<string>('USD');
+  const [currency, setCurrency] = useState<string>('INR');
   const [balance, setBalance] = useState<number>(0);
   const [isEmergencyHalted, setIsEmergencyHalted] = useState<boolean>(false);
   const [autoTradingStatus, setAutoTradingStatus] = useState<any | null>(null);
-  const [activeForexUniverse, setActiveForexUniverse] = useState<string[]>([
-    'EUR/USD', 'GBP/USD', 'USD/JPY', 'USD/CHF', 'AUD/USD'
-  ]);
   const [activeIndianUniverse, setActiveIndianUniverse] = useState<string[]>([
     'NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX'
   ]);
@@ -58,15 +52,15 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setEnvironment('LIVE');
-        setSelectedBroker(data.selectedBroker || 'CTRADER');
+        setSelectedBroker(data.selectedBroker || 'FIVE_PAISA');
         setIsEmergencyHalted(data.emergencyStop?.isHalted || false);
 
         if (data.activeAccount) {
           setMaskedAccount(data.activeAccount.accountId || '****');
-          setCurrency(data.activeAccount.currency || 'USD');
+          setCurrency(data.activeAccount.currency || 'INR');
           setBalance(data.activeAccount.balance || 0);
         } else {
-          const cred = data.credentials?.find((c: any) => c.broker === data.selectedBroker && c.environment === data.environment);
+          const cred = data.credentials?.find((c: any) => c.broker === (data.selectedBroker || 'FIVE_PAISA') && c.environment === data.environment);
           if (cred) {
             setMaskedAccount(cred.maskedAccountId || cred.maskedClientId || '****');
           }
@@ -77,7 +71,6 @@ export default function App() {
     }
   }, []);
 
-  // Fetch all primary terminal data
   // Fetch all primary terminal data. Background refreshes are serialized
   // and never replace valid state with an empty/error fallback.
   const refreshTerminalData = useCallback(async (showSpinner = true) => {
@@ -101,8 +94,7 @@ export default function App() {
           return fallback;
         };
 
-        const [fxPairs, inUnder, sigs, autoStatus, config] = await Promise.all([
-          safeFetchJson('/api/forex/pairs'),
+        const [inUnder, sigs, autoStatus, config] = await Promise.all([
           safeFetchJson('/api/india/underlyings'),
           safeFetchJson('/api/signals/all'),
           safeFetchJson('/api/auto-trading/status', null),
@@ -110,26 +102,14 @@ export default function App() {
         ]);
 
         if (config && typeof config === 'object') {
-          if (Array.isArray(config.autoLiveForexPairs)) {
-            setActiveForexUniverse(config.autoLiveForexPairs);
-          }
           if (Array.isArray(config.autoLiveIndianUnderlyings)) {
             setActiveIndianUniverse(config.autoLiveIndianUnderlyings);
           }
         }
 
-        const selectedForex = Array.isArray(config?.autoLiveForexPairs)
-          ? new Set(config.autoLiveForexPairs.map((symbol: any) => String(symbol).toUpperCase()))
-          : null;
         const selectedIndia = Array.isArray(config?.autoLiveIndianUnderlyings)
           ? new Set(config.autoLiveIndianUnderlyings.map((symbol: any) => String(symbol).toUpperCase()))
           : null;
-
-        if (Array.isArray(fxPairs) && fxPairs.length > 0) {
-          setForexPairs(selectedForex
-            ? fxPairs.filter((row: any) => selectedForex.has(String(row?.symbol || '').toUpperCase()))
-            : fxPairs);
-        }
 
         if (Array.isArray(inUnder) && inUnder.length > 0) {
           setIndianUnderlyings(selectedIndia
@@ -140,17 +120,17 @@ export default function App() {
         if (Array.isArray(sigs) && sigs.length > 0) setSignals(sigs);
         if (autoStatus && typeof autoStatus === 'object') setAutoTradingStatus(autoStatus);
 
-        const [eurCandles, niftyCandles] = await Promise.all([
-          safeFetchJson('/api/candles/EUR%2FUSD'),
-          safeFetchJson('/api/candles/NIFTY')
+        const [niftyCandles, bankNiftyCandles] = await Promise.all([
+          safeFetchJson('/api/candles/NIFTY'),
+          safeFetchJson('/api/candles/BANKNIFTY')
         ]);
 
         // Preserve valid chart data during transient broker/API errors.
-        if (Array.isArray(eurCandles) && eurCandles.length > 0) {
-          setCandlesMap(prev => ({ ...prev, 'EUR/USD': eurCandles }));
-        }
         if (Array.isArray(niftyCandles) && niftyCandles.length > 0) {
           setCandlesMap(prev => ({ ...prev, 'NIFTY': niftyCandles }));
+        }
+        if (Array.isArray(bankNiftyCandles) && bankNiftyCandles.length > 0) {
+          setCandlesMap(prev => ({ ...prev, 'BANKNIFTY': bankNiftyCandles }));
         }
       } catch (err) {
         console.error('Failed to load terminal data:', err);
@@ -287,7 +267,6 @@ export default function App() {
         <Header
           activeTab={activeTab}
           setActiveTab={setActiveTab}
-          forexSessions={forexSessions}
           indianSession={indianSession}
           onRefresh={refreshTerminalData}
           isRefreshing={isRefreshing}
@@ -303,31 +282,10 @@ export default function App() {
       }
     >
       {/* Fixed global shell content outlet: dashboards and all secondary pages render here. */}
-      {activeTab === 'forex_terminal' ? (
-        <ForexTerminalDashboard
-          activeTab={activeTab}
-          setActiveTab={setActiveTab}
-          forexSessions={forexSessions}
-          selectedBroker={selectedBroker}
-          environment={environment}
-          maskedAccount={maskedAccount}
-          balance={balance}
-          currency={currency}
-          isEmergencyHalted={isEmergencyHalted}
-          isRefreshing={isRefreshing}
-          onRefresh={refreshTerminalData}
-          onToggleKillSwitch={handleToggleKillSwitch}
-          candlesMap={candlesMap}
-          forexPairs={forexPairs}
-          signals={signals}
-          onSelectSignal={(sig) => setSelectedSignal(sig)}
-          onRequestOrder={(order) => setPendingOrder(order)}
-        />
-      ) : activeTab === 'market' ? (
+      {activeTab === 'market' ? (
         <TerminalDashboard
           activeTab={activeTab}
           setActiveTab={setActiveTab}
-          forexSessions={forexSessions}
           indianSession={indianSession}
           selectedBroker={selectedBroker}
           environment={environment}
@@ -349,14 +307,13 @@ export default function App() {
             <div className="flex flex-col items-center justify-center min-h-[50vh] space-y-3 font-mono">
               <div className="w-10 h-10 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
               <div className="text-sm text-slate-300">Initializing Quantitative Terminal Engine...</div>
-              <div className="text-xs text-slate-500">Loading broker adapters, SQLite storage and risk gates</div>
+              <div className="text-xs text-slate-500">Loading 5paisa adapter, SQLite storage and risk gates</div>
             </div>
           ) : (
             <>
               {/* Market Watch / scanners */}
               {activeTab === 'market_watch' && (
                 <MarketHub
-                  forexPairs={forexPairs}
                   indianUnderlyings={indianUnderlyings}
                   candlesMap={candlesMap}
                   onSelectSignal={(sig) => setSelectedSignal(sig)}

@@ -83,7 +83,7 @@ interface AccountCardData {
 }
 
 interface MarketQuoteItem {
-  market: 'FOREX' | 'INDIA_EQUITY';
+  market: 'INDIA_EQUITY';
   symbol: string;
   bid: number;
   ask: number;
@@ -277,7 +277,6 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
         reconOrdersRes,
         healthRes,
         autoTradingRes,
-        forexPairsRes,
         indiaUnderlyingsRes,
         signalsRes,
         newsRes,
@@ -291,10 +290,9 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
         fetch('/api/governance/reconciliation/orders', { cache: 'no-store' }).catch(() => null),
         fetch('/api/governance/live-health', { cache: 'no-store' }).catch(() => null),
         fetch('/api/auto-trading/status', { cache: 'no-store' }).catch(() => null),
-        fetch('/api/forex/pairs', { cache: 'no-store' }).catch(() => null),
         fetch('/api/india/underlyings', { cache: 'no-store' }).catch(() => null),
         fetch('/api/signals/all', { cache: 'no-store' }).catch(() => null),
-        fetch('/api/forex/news', { cache: 'no-store' }).catch(() => null),
+        fetch('/api/india/news', { cache: 'no-store' }).catch(() => null),
         fetch('/api/reports/account-balance-history?limit=1000', { cache: 'no-store' }).catch(() => null)
       ]);
 
@@ -333,7 +331,7 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
               realizedPnl: Number(account.realizedPnL ?? account.realizedPnl ?? 0),
               lastSyncTimestamp: Number(account.lastUpdate || Date.now()),
               freshness: 'LIVE',
-              source: item.broker === 'CTRADER' ? `cTrader ${account.accountType === 'DEMO' ? 'DEMO' : 'LIVE'} API` : '5paisa LIVE API',
+              source: '5paisa LIVE API',
               errorMessage: item.error || undefined
             };
           })
@@ -359,7 +357,7 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
             currentPrice: Number(p.currentPrice),
             unrealizedPnl: Number(p.unrealizedPnL ?? 0),
             realizedPnl: Number(p.realizedPnL ?? 0),
-            currency: String(p.currency || 'USD').toUpperCase() === 'INR' ? 'INR' : 'USD',
+            currency: 'INR',
             openedAt: Number(p.timestamp || Date.now()),
             brokerSyncStatus: 'SYNCED',
             reconciliationStatus: 'MINOR_DELAY'
@@ -392,34 +390,9 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
           .filter((o: any) => o.internalOrderId && Number.isFinite(o.quantity)));
       }
 
-      if (forexPairsRes?.ok || indiaUnderlyingsRes?.ok) {
-        const [fxRows, inRows] = await Promise.all([
-          forexPairsRes?.ok ? forexPairsRes.json() : [],
-          indiaUnderlyingsRes?.ok ? indiaUnderlyingsRes.json() : []
-        ]);
+      if (indiaUnderlyingsRes?.ok) {
+        const inRows = await indiaUnderlyingsRes.json();
         const liveQuotes: MarketQuoteItem[] = [];
-        if (Array.isArray(fxRows)) {
-          for (const q of fxRows) {
-            if (q?.dataStatus !== 'FRESH' && q?.dataStatus !== 'LIVE') continue;
-            const bid = Number(q.bid);
-            const ask = Number(q.ask);
-            if (!(bid > 0 && ask > 0)) continue;
-            liveQuotes.push({
-              market: 'FOREX',
-              symbol: q.symbol,
-              bid,
-              ask,
-              ltp: (bid + ask) / 2,
-              spreadPipsOrPts: Number(q.spreadPips ?? q.spreadPipsOrPts ?? 0),
-              change24h: Number(q.changePips24h ?? q.changePips ?? 0),
-              changePercent24h: Number(q.changePercent24h ?? 0),
-              timestamp: Date.now(),
-              timeframe: 'LIVE',
-              status: 'OPEN',
-              freshness: 'LIVE'
-            });
-          }
-        }
         if (Array.isArray(inRows)) {
           for (const q of inRows) {
             const spot = Number(q?.spot);
@@ -427,8 +400,8 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
             liveQuotes.push({
               market: 'INDIA_EQUITY',
               symbol: q.symbol,
-              bid: null as unknown as number,
-              ask: null as unknown as number,
+              bid: spot,
+              ask: spot,
               ltp: spot,
               spreadPipsOrPts: Number(q.spreadPoints ?? 0),
               change24h: Number(q.change ?? 0),
@@ -522,7 +495,7 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
           return {
             id: log.id || `RISK_${index}`,
             timestamp: Number(log.timestamp || Date.now()),
-            broker: log.broker || 'CTRADER',
+            broker: log.broker || 'FIVE_PAISA',
             account: log.account || '****',
             instrument: log.symbol,
             eventType,
@@ -563,7 +536,7 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
     setNewsBusy(true);
     setNewsError(null);
     try {
-      const response = await fetch('/api/forex/news?refresh=true', {
+      const response = await fetch('/api/india/news?refresh=true', {
         cache: 'no-store',
         headers: { Accept: 'application/json' }
       });
@@ -779,24 +752,25 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
   const runCTraderFunctionalValidation = useCallback(async () => {
     setCtraderFunctionalValidationBusy(true);
     try {
-      const res = await fetch('/api/operations/ctrader-functional-validation', {
+      const res = await fetch('/api/brokers/test?broker=FIVE_PAISA&environment=LIVE', {
         cache: 'no-store',
         headers: { Accept: 'application/json' }
       });
       const data = await res.json().catch(() => ({}));
-      setCtraderFunctionalValidation(data);
-      if (res.ok && data.ready) {
-        setGateFeedback('cTrader ' + (data.mode || 'API') + ' functional validation passed. No broker order was submitted.');
+      setCtraderFunctionalValidation({
+        ready: data.connected,
+        mode: 'LIVE',
+        status: data.connected ? 'CONNECTED' : 'DISCONNECTED',
+        failures: data.connected ? [] : [data.error || 'Connection failed']
+      });
+      if (res.ok && data.connected) {
+        setGateFeedback('5paisa LIVE API connection verified. Account: ' + (data.account || '****') + ' (INR).');
       } else {
-        setGateFeedback(
-          Array.isArray(data?.failures) && data.failures.length
-            ? 'cTrader functional validation blocked: ' + data.failures.join(', ')
-            : (data?.message || 'cTrader functional validation is unavailable.')
-        );
+        setGateFeedback('5paisa connection test: ' + (data.error || 'Connection unavailable.'));
       }
     } catch (err) {
-      console.warn('cTrader functional validation failed:', err);
-      setGateFeedback('cTrader functional validation failed.');
+      console.warn('5paisa connection verification failed:', err);
+      setGateFeedback('5paisa connection verification failed.');
     } finally {
       setCtraderFunctionalValidationBusy(false);
     }
@@ -910,8 +884,8 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
     return Number.isFinite(numeric) ? numeric.toFixed(digits) : '—';
   };
 
-  const formatMarketValue = (value: number | null | undefined, market: MarketQuoteItem['market'], symbol: string) => {
-    const digits = market === 'FOREX' && !symbol.includes('JPY') ? 5 : 2;
+  const formatMarketValue = (value: number | null | undefined, _market?: MarketQuoteItem['market'], _symbol?: string) => {
+    const digits = 2;
     return formatFixed(value, digits);
   };
 
@@ -986,23 +960,14 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
                 submitted during this preparation phase.
               </p>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 gap-2">
                 <div className="p-3 rounded-lg bg-slate-950 border border-slate-800">
-                  <div className="text-slate-500 text-[10px]">FOREX / cTRADER</div>
-                  <div className={closedMarketPrompt.marketGate?.forex?.isOpen ? 'text-emerald-400 font-bold mt-1' : 'text-amber-300 font-bold mt-1'}>
-                    {closedMarketPrompt.marketGate?.forex?.isOpen ? 'OPEN' : 'CLOSED'}
-                  </div>
-                  <div className="text-slate-500 text-[10px] mt-1">
-                    {closedMarketPrompt.marketGate?.forex?.sessions?.join(' / ') || 'Session unavailable'}
-                  </div>
-                </div>
-                <div className="p-3 rounded-lg bg-slate-950 border border-slate-800">
-                  <div className="text-slate-500 text-[10px]">INDIA / 5PAISA</div>
+                  <div className="text-slate-500 text-[10px]">NSE & BSE / 5PAISA</div>
                   <div className={closedMarketPrompt.marketGate?.india?.isOpen ? 'text-emerald-400 font-bold mt-1' : 'text-amber-300 font-bold mt-1'}>
-                    {closedMarketPrompt.marketGate?.india?.isOpen ? 'OPEN' : 'CLOSED'}
+                    {closedMarketPrompt.marketGate?.india?.isOpen ? 'MARKET OPEN' : 'MARKET CLOSED'}
                   </div>
                   <div className="text-slate-500 text-[10px] mt-1">
-                    {closedMarketPrompt.marketGate?.india?.phase || 'Session unavailable'}
+                    Phase: {closedMarketPrompt.marketGate?.india?.phase || 'Session unavailable'}
                   </div>
                 </div>
               </div>
@@ -1045,9 +1010,9 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
                 </span>
               </div>
               <div className="text-slate-400 text-xs flex items-center space-x-2 mt-0.5">
-                <span>Multi-Market Operations</span>
+                <span>Indian Market Operations</span>
                 <span className="text-slate-600">•</span>
-                <span>cTrader (Forex) & 5paisa (India F&O)</span>
+                <span>5paisa LIVE API (NSE / BSE / F&O)</span>
                 <span className="text-slate-600">•</span>
                 <span>Synced: {new Date(lastRefreshedAt).toLocaleTimeString()}</span>
               </div>
@@ -1275,7 +1240,7 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
               <p className="text-[10px] text-slate-500 mt-1">Authoritative LIVE API snapshots at 00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00 and 21:00. No calculated or fabricated balance values are stored.</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <select value={balanceSnapshotBrokerFilter} onChange={e => setBalanceSnapshotBrokerFilter(e.target.value)} className="bg-slate-950 border border-slate-800 text-slate-200 rounded px-2.5 py-1.5"><option value="ALL">All Brokers</option><option value="CTRADER">cTrader</option><option value="FIVE_PAISA">5paisa</option></select>
+              <select value={balanceSnapshotBrokerFilter} onChange={e => setBalanceSnapshotBrokerFilter(e.target.value)} className="bg-slate-950 border border-slate-800 text-slate-200 rounded px-2.5 py-1.5"><option value="ALL">All Brokers</option><option value="FIVE_PAISA">5paisa (NSE)</option></select>
               <input type="date" value={balanceSnapshotDateFilter} onChange={e => setBalanceSnapshotDateFilter(e.target.value)} className="bg-slate-950 border border-slate-800 text-slate-200 rounded px-2.5 py-1.5" />
               {(balanceSnapshotDateFilter || balanceSnapshotBrokerFilter !== 'ALL') && <button type="button" onClick={() => { setBalanceSnapshotDateFilter(''); setBalanceSnapshotBrokerFilter('ALL'); }} className="px-2.5 py-1.5 rounded border border-slate-700 bg-slate-950 text-slate-300 hover:text-white">Clear</button>}
             </div>
@@ -1316,7 +1281,7 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider flex items-center space-x-2">
               <TrendingUp className="w-4 h-4 text-emerald-400" />
-              <span>Market Intelligence (Forex & Indian Equities)</span>
+              <span>Market Intelligence (NSE & BSE Indian Equities & Indices)</span>
             </h3>
             <span className="text-xs text-slate-400 font-mono">Live Ingestion & Point-in-Time Freshness</span>
           </div>
@@ -1325,13 +1290,11 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
             <table className="w-full text-left font-mono text-xs">
               <thead className="bg-slate-950/90 text-slate-400 border-b border-slate-800">
                 <tr>
-                  <th className="py-2.5 px-3">MARKET</th>
+                  <th className="py-2.5 px-3">EXCHANGE</th>
                   <th className="py-2.5 px-3">INSTRUMENT</th>
-                  <th className="py-2.5 px-3">BID</th>
-                  <th className="py-2.5 px-3">ASK</th>
-                  <th className="py-2.5 px-3">SPREAD</th>
-                  <th className="py-2.5 px-3">LTP / CLOSE</th>
-                  <th className="py-2.5 px-3">24H CHANGE</th>
+                  <th className="py-2.5 px-3">SPOT / LTP</th>
+                  <th className="py-2.5 px-3">CHANGE (PTS)</th>
+                  <th className="py-2.5 px-3">24H CHANGE (%)</th>
                   <th className="py-2.5 px-3">FRESHNESS</th>
                 </tr>
               </thead>
@@ -1339,19 +1302,15 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
                 {marketQuotes.map((q, qIdx) => (
                   <tr key={`${q.market || 'mkt'}-${q.symbol || 'sym'}-${qIdx}`} className="hover:bg-slate-800/40 transition">
                     <td className="py-2.5 px-3">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                        q.market === 'FOREX' ? 'bg-sky-950 text-sky-300 border border-sky-800' : 'bg-amber-950 text-amber-300 border border-amber-800'
-                      }`}>
-                        {q.market}
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-800">
+                        {q.symbol === 'SENSEX' ? 'BSE' : 'NSE'}
                       </span>
                     </td>
                     <td className="py-2.5 px-3 font-bold text-white">{q.symbol}</td>
-                    <td className="py-2.5 px-3 text-slate-200">{formatMarketValue(q.bid, q.market, q.symbol)}</td>
-                    <td className="py-2.5 px-3 text-slate-200">{formatMarketValue(q.ask, q.market, q.symbol)}</td>
-                    <td className="py-2.5 px-3 text-emerald-400">
-                      {q.spreadPipsOrPts} {q.market === 'FOREX' ? 'pips' : 'pts'}
+                    <td className="py-2.5 px-3 font-bold text-slate-100">₹{q.ltp.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td className={`py-2.5 px-3 font-semibold ${q.change24h >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {q.change24h >= 0 ? '+' : ''}{q.change24h.toFixed(2)} pts
                     </td>
-                    <td className="py-2.5 px-3 font-bold text-slate-100">{q.ltp.toFixed(q.market === 'FOREX' && !q.symbol.includes('JPY') ? 5 : 2)}</td>
                     <td className={`py-2.5 px-3 font-semibold ${q.changePercent24h >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                       {q.changePercent24h >= 0 ? '+' : ''}{q.changePercent24h.toFixed(2)}%
                     </td>
@@ -1937,7 +1896,6 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
                 className="bg-slate-950 border border-slate-800 text-slate-200 rounded px-2.5 py-1 text-xs"
               >
                 <option value="ALL">All Brokers</option>
-                <option value="CTRADER">cTrader (USD)</option>
                 <option value="FIVE_PAISA">5paisa (INR)</option>
               </select>
 
@@ -2044,7 +2002,6 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
                 className="bg-slate-950 border border-slate-800 text-slate-200 rounded px-2.5 py-1 text-xs"
               >
                 <option value="ALL">All Brokers</option>
-                <option value="CTRADER">cTrader</option>
                 <option value="FIVE_PAISA">5paisa</option>
               </select>
             </div>
@@ -2394,24 +2351,24 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
               </div>
 
               <div className="flex items-center justify-between gap-2 bg-slate-900/80 p-2 rounded border border-slate-800">
-                <span className="text-slate-400">cTrader Functional Validation:</span>
+                <span className="text-slate-400">5paisa Connection Verification:</span>
                 <button
                   type="button"
                   onClick={runCTraderFunctionalValidation}
                   disabled={ctraderFunctionalValidationBusy}
                   className="px-2.5 py-1 rounded border border-fuchsia-700 bg-fuchsia-950/70 text-fuchsia-300 hover:bg-fuchsia-900/80 text-[10px] font-bold disabled:opacity-50"
-                  title="Validate cTrader account, market data, positions, orders, history and shared order packet logic using the currently selected LIVE or DEMO API mode. No broker order is submitted."
+                  title="Validate 5paisa LIVE API connection, account status, and balance. No broker order is submitted."
                 >
-                  {ctraderFunctionalValidationBusy ? 'TESTING...' : 'VALIDATE cTRADER'}
+                  {ctraderFunctionalValidationBusy ? 'TESTING...' : 'VERIFY 5PAISA'}
                 </button>
               </div>
 
               {ctraderFunctionalValidation && (
                 <div className="bg-slate-900/70 p-2.5 rounded border border-slate-800 space-y-2">
                   <div className="flex items-center justify-between">
-                    <span className="text-slate-400">cTrader Test Status</span>
+                    <span className="text-slate-400">5paisa Test Status</span>
                     <strong className={ctraderFunctionalValidation.ready ? 'text-emerald-400' : 'text-rose-400'}>
-                      {(ctraderFunctionalValidation.mode || 'UNKNOWN') + ' / ' + (ctraderFunctionalValidation.status || 'UNKNOWN')}
+                      {(ctraderFunctionalValidation.mode || 'LIVE') + ' / ' + (ctraderFunctionalValidation.status || 'UNKNOWN')}
                     </strong>
                   </div>
                   <div className="flex items-center justify-between">

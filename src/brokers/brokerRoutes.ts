@@ -18,7 +18,7 @@ import { autoTradingService } from '../services/autoTradingService';
 
 export const brokerRouter = Router();
 
-const LIVE_BROKERS: BrokerType[] = ['CTRADER', 'FIVE_PAISA'];
+const LIVE_BROKERS: BrokerType[] = ['FIVE_PAISA'];
 
 // Several terminal surfaces request broker status at nearly the same time.
 // Share one short-lived broker snapshot and one in-flight request so normal
@@ -38,12 +38,8 @@ let positionsInFlight: Promise<any[]> | null = null;
 let ordersInFlight: Promise<any[]> | null = null;
 const BROKER_COLLECTION_CACHE_TTL_MS = 10_000;
 
-function resolveMarketBroker(market: string): BrokerType {
-  if (market === 'FOREX') return 'CTRADER';
-  if (market === 'INDIAN_EQUITY' || market === 'INDIAN_FUTURES' || market === 'INDIAN_OPTIONS') {
-    return 'FIVE_PAISA';
-  }
-  throw new Error(`Unsupported market: ${market}. No compatible live broker is configured.`);
+function resolveMarketBroker(_market: string): BrokerType {
+  return 'FIVE_PAISA';
 }
 
 function forexQuoteCurrencies(symbol: string): { base: string; quote: string } | null {
@@ -286,9 +282,8 @@ async function refreshBrokerStatusSnapshot(forceRefresh?: boolean): Promise<any>
   const payload = {
     environment,
     routingMode: 'AUTOMATIC_BY_MARKET',
-    selectedBroker: null,
+    selectedBroker: 'FIVE_PAISA',
     brokerRouting: {
-      FOREX: 'CTRADER',
       INDIAN_EQUITY: 'FIVE_PAISA',
       INDIAN_FUTURES: 'FIVE_PAISA',
       INDIAN_OPTIONS: 'FIVE_PAISA'
@@ -367,7 +362,7 @@ brokerRouter.post('/test-connection', async (req: Request, res: Response) => {
   const requestedBroker = req.body?.broker as BrokerType | undefined;
 
   if (requestedBroker && !LIVE_BROKERS.includes(requestedBroker)) {
-    return res.status(400).json({ error: 'Allowed live brokers: CTRADER, FIVE_PAISA' });
+    return res.status(400).json({ error: 'Allowed live brokers: FIVE_PAISA' });
   }
 
   const brokers = requestedBroker ? [requestedBroker] : LIVE_BROKERS;
@@ -391,7 +386,7 @@ brokerRouter.post('/test-connection', async (req: Request, res: Response) => {
 });
 
 // Account discovery is broker-explicit for administrative diagnostics.
-// Normal trading/dashboard flows use /status and aggregate both brokers.
+// Normal trading/dashboard flows use /status and aggregate 5paisa.
 brokerRouter.get('/accounts', async (req: Request, res: Response) => {
   const requestedBroker = req.query.broker as BrokerType | undefined;
   const brokers = requestedBroker ? [requestedBroker] : LIVE_BROKERS;
@@ -404,7 +399,7 @@ brokerRouter.get('/accounts', async (req: Request, res: Response) => {
     }));
     res.json(results.flat());
   } catch (err: any) {
-    const broker = requestedBroker || 'CTRADER';
+    const broker = requestedBroker || 'FIVE_PAISA';
     const normalized = normalizeBrokerError(err, broker, 'LIVE');
     res.status(500).json({ error: normalized.message, code: normalized.code });
   }
@@ -421,20 +416,19 @@ brokerRouter.post('/environment', (_req: Request, res: Response) => {
   });
 });
 
-// Legacy endpoint retained for compatibility. It no longer controls which
-// broker is active; both live brokers remain active.
+// Legacy endpoint retained for compatibility.
 brokerRouter.post('/select', (req: Request, res: Response) => {
   const { broker } = req.body as { broker: BrokerType };
 
   if (!LIVE_BROKERS.includes(broker)) {
-    return res.status(400).json({ error: 'Invalid broker. Allowed: CTRADER, FIVE_PAISA' });
+    return res.status(400).json({ error: 'Invalid broker. Allowed: FIVE_PAISA' });
   }
 
   res.json({
     success: true,
-    selectedBroker: null,
+    selectedBroker: 'FIVE_PAISA',
     routingMode: 'AUTOMATIC_BY_MARKET',
-    message: 'Manual broker selection is disabled. Goldcrest automatically routes each market to its compatible live broker.'
+    message: 'Goldcrest routes Indian markets to 5paisa LIVE API.'
   });
 });
 
@@ -448,7 +442,7 @@ brokerRouter.post('/credentials/live', (req: Request, res: Response) => {
   }
 
   if (!LIVE_BROKERS.includes(broker)) {
-    return res.status(400).json({ error: 'Missing or invalid broker. Allowed: CTRADER, FIVE_PAISA' });
+    return res.status(400).json({ error: 'Missing or invalid broker. Allowed: FIVE_PAISA' });
   }
 
   if (!credentials) {
@@ -1192,7 +1186,7 @@ brokerRouter.post('/order', async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     const broker = (() => {
-      try { return resolveMarketBroker(orderReq?.market); } catch { return 'CTRADER' as BrokerType; }
+      try { return resolveMarketBroker(orderReq?.market); } catch { return 'FIVE_PAISA' as BrokerType; }
     })();
     const normalized = normalizeBrokerError(err, broker, env);
     res.status(400).json({ error: normalized.message, code: normalized.code });
@@ -1203,7 +1197,7 @@ brokerRouter.post('/order/:id/cancel', async (req: Request, res: Response) => {
   try {
     const broker = req.body?.broker as BrokerType | undefined;
     if (!broker || !LIVE_BROKERS.includes(broker)) {
-      return res.status(400).json({ error: 'Broker is required for cancel operation: CTRADER or FIVE_PAISA' });
+      return res.status(400).json({ error: 'Broker is required for cancel operation: FIVE_PAISA' });
     }
     const success = await brokerRegistry.getAdapter(broker, 'LIVE').cancelOrder(req.params.id);
     res.json({ success, broker });
@@ -1216,7 +1210,7 @@ brokerRouter.post('/position/:id/close', async (req: Request, res: Response) => 
   try {
     const broker = req.body?.broker as BrokerType | undefined;
     if (!broker || !LIVE_BROKERS.includes(broker)) {
-      return res.status(400).json({ error: 'Broker is required for close operation: CTRADER or FIVE_PAISA' });
+      return res.status(400).json({ error: 'Broker is required for close operation: FIVE_PAISA' });
     }
     const success = await brokerRegistry.getAdapter(broker, 'LIVE').closePosition(req.params.id, req.body?.quantity);
     res.json({ success, broker });
@@ -1259,10 +1253,10 @@ brokerRouter.post('/controls', (req: Request, res: Response) => {
 });
 
 brokerRouter.post('/reconciliation/snapshot', async (req: Request, res: Response) => {
-  const broker = req.body?.broker as ('CTRADER' | 'FIVE_PAISA') | undefined;
-  const brokers: ('CTRADER' | 'FIVE_PAISA')[] = broker ? [broker] : ['CTRADER', 'FIVE_PAISA'];
+  const broker = req.body?.broker as ('FIVE_PAISA') | undefined;
+  const brokers: ('FIVE_PAISA')[] = broker ? [broker] : ['FIVE_PAISA'];
   if (brokers.some(b => !LIVE_BROKERS.includes(b))) {
-    return res.status(400).json({ error: 'Allowed live brokers: CTRADER, FIVE_PAISA' });
+    return res.status(400).json({ error: 'Allowed live brokers: FIVE_PAISA' });
   }
   try {
     const snapshots = await Promise.all(brokers.map(b => reconciliationService.captureBrokerSnapshot(b)));
@@ -1297,7 +1291,11 @@ brokerRouter.post('/fivepaisa/totp-login', async (req: Request, res: Response) =
     const account = await adapter.getAccount();
     res.json({ success: true, message: 'Successfully authenticated with 5paisa OpenAPI via TOTP.', account });
   } catch (err: any) {
-    res.status(400).json({ error: err.message || '5paisa TOTP authentication failed' });
+    const isRateLimited = String(err?.message || '').includes('RATE_LIMITED');
+    res.status(isRateLimited ? 429 : 400).json({
+      error: err.message || '5paisa TOTP authentication failed',
+      code: isRateLimited ? 'RATE_LIMITED' : 'ERROR'
+    });
   }
 });
 

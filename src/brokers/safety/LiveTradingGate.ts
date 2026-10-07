@@ -3,6 +3,7 @@ import { brokerRegistry } from '../registry';
 import { killSwitch } from './KillSwitch';
 import { tradeValidator } from './TradeValidator';
 import { getSystemConfig } from '../../services/configService';
+import { getResolvedMaxTradeValueForNifty } from '../../services/niftyTradeLimits';
 import { liveRuntimeLog } from '../../services/liveRuntimeLog';
 
 export interface LiveGateEvaluationParams {
@@ -194,7 +195,11 @@ export class LiveTradingGate {
     // volume by setting this value.
     const config = getSystemConfig();
     const isForex = params.order.market === 'FOREX';
-    const maxTradeValue = isForex ? config.maxTradeValueForexUsd : config.maxTradeValueIndianInr;
+    let maxTradeValue = config.maxTradeValueForexUsd;
+    if (!isForex) {
+      const niftyResolution = getResolvedMaxTradeValueForNifty(params.order.symbol, config);
+      maxTradeValue = niftyResolution.maxTradeValueInr;
+    }
     let maximumTradeValueCheckPassed = Number.isFinite(maxTradeValue) && maxTradeValue > 0;
     let tradeValue = NaN;
     let tradeValueUsd = NaN;
@@ -265,9 +270,10 @@ export class LiveTradingGate {
         );
       } else if (maximumTradeValueCheckPassed && !isForex && tradeValue > maxTradeValue + tradeValueTolerance) {
         maximumTradeValueCheckPassed = false;
-        failedReasons.push(
-          `Condition 16 Failed: Trade value ${tradeValue.toFixed(2)} INR exceeds configured maximum of ${maxTradeValue.toFixed(2)} INR for 5paisa.`
-        );
+        const msg = config.smallTradeBudgetEnabled
+          ? `Condition 16 Failed: Trade value ₹${tradeValue.toFixed(2)} exceeds configured Small Amount testing budget of ₹${maxTradeValue.toFixed(2)} for ${params.order.symbol} F&O.`
+          : `Condition 16 Failed: Trade value ₹${tradeValue.toFixed(2)} exceeds configured maximum of ₹${maxTradeValue.toFixed(2)} for 5paisa.`;
+        failedReasons.push(msg);
       } else if (maximumTradeValueCheckPassed && isForex && !(tradeValueUsd > 0)) {
         maximumTradeValueCheckPassed = false;
         failedReasons.push('Condition 16 Failed: USD-converted Forex trade value could not be safely calculated.');

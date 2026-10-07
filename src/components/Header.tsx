@@ -1,13 +1,12 @@
 import React from 'react';
-import { Activity, AlertOctagon, BarChart2, Database, Globe, RefreshCw, ShieldAlert } from 'lucide-react';
-import { ForexSessionState, IndianSessionState } from '../markets/common/types';
+import { Activity, AlertOctagon, BarChart2, Database, RefreshCw, ShieldAlert } from 'lucide-react';
+import { IndianSessionState } from '../markets/common/types';
 import { BrokerType, TradingEnvironment } from '../brokers/types';
 import { BalanceDisplay } from './BalanceDisplay';
 
 interface HeaderProps {
   activeTab: string;
   setActiveTab: (tab: string) => void;
-  forexSessions: ForexSessionState;
   indianSession: IndianSessionState;
   onRefresh: () => void;
   isRefreshing: boolean;
@@ -23,7 +22,6 @@ interface HeaderProps {
 
 export const Header: React.FC<HeaderProps> = ({
   activeTab,
-  forexSessions,
   indianSession,
   onRefresh,
   isRefreshing,
@@ -36,8 +34,7 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const isLive = true;
   const activeArea =
-    activeTab === 'forex_terminal' ? 'FOREX' :
-    activeTab === 'market' ? 'NSE' :
+    activeTab === 'market' ? 'NSE / F&O' :
     activeTab === 'market_watch' ? 'MARKET WATCH' :
     activeTab === 'control_center' ? 'ORDERS' :
     activeTab === 'history' ? 'HISTORY' :
@@ -45,10 +42,8 @@ export const Header: React.FC<HeaderProps> = ({
     activeTab === 'signals' ? 'STRATEGY' :
     activeTab === 'research' ? 'BACKTEST' :
     activeTab === 'pnl' ? 'REPORTS' :
-    activeTab === 'settings' ? 'SETTINGS' : 'MARKET';
+    activeTab === 'settings' ? 'SETTINGS' : 'INDIAN MARKET';
 
-  const fxOpen = forexSessions.activeSessions.length > 0 && !forexSessions.activeSessions.includes('CLOSED (WEEKEND)');
-  const fxLabel = forexSessions.activeSessions.length ? forexSessions.activeSessions.join(' / ') : 'CLOSED (WEEKEND)';
   const nseOpen = indianSession.isOpen;
 
   return (
@@ -63,7 +58,9 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="flex items-center gap-3 whitespace-nowrap min-w-0">
           <span>ACTIVE AREA: <b className="text-slate-200">{activeArea}</b></span>
           <span className="text-slate-700">|</span>
-          <span>BROKERS: <b className="text-slate-200">cTrader + 5paisa</b></span>
+          <span>BROKER: <b className="text-emerald-400">5paisa (NSE / BSE / MCX)</b></span>
+          <span className="text-slate-700">|</span>
+          <span>MARKET: <b className="text-slate-200">INDIAN EQUITIES &amp; DERIVATIVES</b></span>
           <span className="text-slate-700">|</span>
           <span>ENVIRONMENT: <b className="text-rose-400">LIVE</b></span>
           <span className="text-slate-700">|</span>
@@ -101,7 +98,7 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
           <div>
             <h1 className="text-base font-bold tracking-tight text-white leading-tight">Goldcrest Finman - AI Trading</h1>
-            <div className="text-[10px] text-emerald-400 font-bold font-mono mt-1">PRODUCTION TERMINAL</div>
+            <div className="text-[10px] text-emerald-400 font-bold font-mono mt-1">INDIAN MARKET TERMINAL</div>
           </div>
         </div>
 
@@ -111,23 +108,12 @@ export const Header: React.FC<HeaderProps> = ({
 
         <div className="flex flex-col gap-1.5 min-w-[210px] shrink-0">
           <div
-            id="header_fx_session_badge"
-            className={`h-7 flex items-center gap-1.5 px-2.5 rounded border text-[10px] font-mono ${
-              fxOpen ? 'bg-emerald-950/40 border-emerald-800/60 text-emerald-300' : 'bg-slate-950 border-slate-800 text-slate-400'
-            }`}
-          >
-            <Globe className={`w-3 h-3 ${fxOpen ? 'text-emerald-400' : 'text-slate-500'}`} />
-            <span className="text-slate-400 font-semibold">FX:</span>
-            <span className={`w-2 h-2 rounded-full ${fxOpen ? 'bg-emerald-500' : 'bg-slate-500'}`} />
-            <span className="truncate">{fxLabel}</span>
-          </div>
-          <div
             id="header_nse_session_badge"
-            className={`h-7 flex items-center gap-1.5 px-2.5 rounded border text-[10px] font-mono ${
+            className={`h-8 flex items-center gap-2 px-3 rounded border text-xs font-mono ${
               nseOpen ? 'bg-emerald-950/40 border-emerald-800/60 text-emerald-300' : 'bg-slate-950 border-slate-800 text-slate-400'
             }`}
           >
-            <Activity className={`w-3 h-3 ${nseOpen ? 'text-emerald-400' : 'text-amber-400'}`} />
+            <Activity className={`w-3.5 h-3.5 ${nseOpen ? 'text-emerald-400' : 'text-amber-400'}`} />
             <span className="text-slate-400 font-semibold">NSE:</span>
             <span className={`w-2 h-2 rounded-full ${nseOpen ? 'bg-emerald-500' : 'bg-amber-500/80'}`} />
             <span>{indianSession.istTime || '—'} ({indianSession.currentPhase})</span>

@@ -6,7 +6,7 @@ type HistoryPeriod = 'TODAY' | 'CURRENT_MONTH' | 'PREVIOUS_MONTH' | 'CUSTOM';
 
 interface OrderHistoryRow {
   id: string;
-  broker: 'CTRADER' | 'FIVE_PAISA';
+  broker: 'FIVE_PAISA';
   environment: 'LIVE';
   symbol: string;
   openingDirection: 'BUY' | 'SELL';
