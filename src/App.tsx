@@ -18,7 +18,7 @@ import { getIndianSessionState } from './markets/common/session';
 import { BrokerType, TradingEnvironment, OrderRequest } from './brokers/types';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<string>('market');
+  const [activeTab, setActiveTab] = useState<string>('trading');
   const [indianUnderlyings, setIndianUnderlyings] = useState<any[]>([]);
   const [indianSession, setIndianSession] = useState<IndianSessionState>(() => getIndianSessionState(new Date()));
   const [signals, setSignals] = useState<TradingSignal[]>([]);
@@ -282,83 +282,35 @@ export default function App() {
       }
     >
       {/* Fixed global shell content outlet: dashboards and all secondary pages render here. */}
-      {activeTab === 'market' ? (
-        <TerminalDashboard
-          activeTab={activeTab}
-          setActiveTab={setActiveTab}
-          indianSession={indianSession}
-          selectedBroker={selectedBroker}
-          environment={environment}
-          maskedAccount={maskedAccount}
-          balance={balance}
-          currency={currency}
-          isEmergencyHalted={isEmergencyHalted}
-          isRefreshing={isRefreshing}
-          onRefresh={refreshTerminalData}
-          onToggleKillSwitch={handleToggleKillSwitch}
-          candlesMap={candlesMap}
-          indianUnderlyings={indianUnderlyings}
-          signals={signals}
-          onSelectSignal={(sig) => setSelectedSignal(sig)}
-        />
-      ) : (
-        <main className="min-h-[calc(100vh-162px)] w-full px-4 sm:px-6 lg:px-8 py-5 space-y-4 bg-[#03070d] text-slate-100">
-          {loadingInitial ? (
-            <div className="flex flex-col items-center justify-center min-h-[50vh] space-y-3 font-mono">
-              <div className="w-10 h-10 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
-              <div className="text-sm text-slate-300">Initializing Quantitative Terminal Engine...</div>
-              <div className="text-xs text-slate-500">Loading 5paisa adapter, SQLite storage and risk gates</div>
-            </div>
-          ) : (
-            <>
-              {/* Market Watch / scanners */}
-              {activeTab === 'market_watch' && (
-                <MarketHub
-                  indianUnderlyings={indianUnderlyings}
-                  candlesMap={candlesMap}
-                  onSelectSignal={(sig) => setSelectedSignal(sig)}
-                  onEnsureCandles={ensureCandlesLoaded}
-                  initialOptionSymbol={selectedOptionUnderlying}
-                  environment={environment}
-                />
-              )}
-
-              {activeTab === 'signals' && (
-                <SignalsView
-                  signals={signals}
-                  onSelectSignal={(sig) => setSelectedSignal(sig)}
-                />
-              )}
-
-              {activeTab === 'trading' && (
-                <TradingHub
-                  environment={environment}
-                  selectedBroker={selectedBroker}
-                  maskedAccount={maskedAccount}
-                  balance={balance}
-                  currency={currency}
-                  isEmergencyHalted={isEmergencyHalted}
-                  onRequestEnvironmentChange={handleRequestEnvironmentChange}
-                />
-              )}
-
-              {(activeTab === 'pnl' || activeTab === 'accounting') && (
-                <TradingControlCenter
-                initialSection="ACCOUNT_OVERVIEW"
-                reportsMode={true}
-                onSelectSignalModal={(sig) => setSelectedSignal(sig)}
-                autoTradingStatus={autoTradingStatus}
-                onAutoTradingStatusChange={setAutoTradingStatus}
+      <main className="min-h-[calc(100vh-162px)] w-full px-4 sm:px-6 lg:px-8 py-5 space-y-4 bg-[#03070d] text-slate-100">
+        {loadingInitial ? (
+          <div className="flex flex-col items-center justify-center min-h-[50vh] space-y-3 font-mono">
+            <div className="w-10 h-10 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+            <div className="text-sm text-slate-300">Initializing Quantitative Terminal Engine...</div>
+            <div className="text-xs text-slate-500">Loading 5paisa adapter, SQLite storage and risk gates</div>
+          </div>
+        ) : (
+          <>
+            {(activeTab === 'trading' || activeTab === 'market' || activeTab === 'market_watch') && (
+              <TradingHub
+                environment={environment}
+                selectedBroker={selectedBroker}
+                maskedAccount={maskedAccount}
+                balance={balance}
+                currency={currency}
+                isEmergencyHalted={isEmergencyHalted}
+                onRequestEnvironmentChange={handleRequestEnvironmentChange}
               />
-              )}
+            )}
 
-              {(activeTab === 'research' || activeTab === 'ml') && (
-                <div className="rounded-lg border border-slate-800 bg-slate-900 p-6 text-sm text-slate-300">
-                  Research and ML training interfaces are retired from the LIVE production runtime.
-                </div>
-              )}
+            {activeTab === 'signals' && (
+              <SignalsView
+                signals={signals}
+                onSelectSignal={(sig) => setSelectedSignal(sig)}
+              />
+            )}
 
-              {(activeTab === 'control_center' || activeTab === 'operations' || activeTab === 'reconciliation' || activeTab === 'reconcile') && (
+              {(activeTab === 'control_center' || activeTab === 'pnl' || activeTab === 'accounting' || activeTab === 'operations' || activeTab === 'reconciliation' || activeTab === 'reconcile') && (
                 <TradingControlCenter
                 onSelectSignalModal={(sig) => setSelectedSignal(sig)}
                 autoTradingStatus={autoTradingStatus}
@@ -390,7 +342,6 @@ export default function App() {
             </>
           )}
         </main>
-      )}
  
       {/* Signal Quantitative Inspection Modal */}
       {selectedSignal && (
