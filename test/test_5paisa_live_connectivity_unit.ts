@@ -326,10 +326,21 @@ async function runUnitSuite() {
     });
     const originalFetch = global.fetch;
     (global as any).fetch = async (url: any) => {
-      if (String(url).includes('/MarketFeed')) {
+      const urlStr = String(url);
+      if (urlStr.includes('/MarketDepth') || urlStr.includes('/MarketFeed')) {
         return new Response(JSON.stringify({
           head: { Status: 0 },
           body: {
+            MarketDepthData: [
+              {
+                BbBuySellFlag: 66,
+                Price: 25120.00
+              },
+              {
+                BbBuySellFlag: 83,
+                Price: 25121.50
+              }
+            ],
             MarketFeedData: [
               {
                 ScripCode: 999920000,

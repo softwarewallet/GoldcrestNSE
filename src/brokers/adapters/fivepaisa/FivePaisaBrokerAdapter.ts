@@ -614,13 +614,90 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
     }, 0);
   }
 
-  async getOpenOrders(): Promise<NormalizedOrder[]> {
+  /**
+   * Authoritative read-only helper to fetch order book details from 5paisa OpenAPI V4 OrderBook.
+   * Strictly read-only; never touches order modification or cancellation endpoints.
+   */
+  private async fetchAuthoritativeOrderBook(): Promise<any[]> {
     await this.ensureActiveSession();
-    if (!this.config.accessToken) throw new BrokerError('AUTHENTICATION_FAILED', '5paisa access token is unavailable.', 'FIVE_PAISA', this.environment);
-    const url = `${this.getApiHost()}/VendorsAPI/Service1.svc/V1/OrderBook`;
-    const data = await this.postUserApi(url, '5POB', { ClientCode: this.config.clientCode || this.config.userId });
-    const orders: any[] = data?.body?.OrderBookDetail || [];
-    if (!Array.isArray(orders)) throw new BrokerError('BROKER_UNAVAILABLE', '5paisa returned an invalid order-book response.', 'FIVE_PAISA', this.environment);
+    if (!this.config.accessToken) {
+      throw new BrokerError('AUTHENTICATION_FAILED', '5paisa access token is unavailable.', 'FIVE_PAISA', this.environment);
+    }
+
+    const url = `${this.getApiHost()}/VendorsAPI/Service1.svc/V4/OrderBook`;
+    const clientCode = this.config.clientCode || this.config.userId || '';
+    const userKey = this.config.userKey || '';
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.config.accessToken}`,
+        'Content-Type': 'application/json',
+        '5Paisa-API-Uid': 'ka7SFqAU6SC'
+      },
+      body: JSON.stringify({
+        head: {
+          key: userKey,
+          Key: userKey
+        },
+        body: {
+          ClientCode: clientCode
+        }
+      })
+    });
+
+    if (!res.ok) {
+      throw new BrokerError('BROKER_UNAVAILABLE', `5paisa OrderBook HTTP ${res.status}: ${res.statusText}`, 'FIVE_PAISA', this.environment);
+    }
+
+    const data = await res.json().catch(() => ({}));
+
+    // Normalize head status
+    const headStatusRaw = data?.head?.status ?? data?.head?.Status;
+    if (headStatusRaw !== undefined && headStatusRaw !== null) {
+      const headStatusNum = Number(headStatusRaw);
+      if (Number.isFinite(headStatusNum) && headStatusNum !== 0) {
+        const desc = data?.head?.statusDescription ?? data?.head?.StatusDescription ?? data?.head?.Message ?? '5paisa OrderBook request rejected.';
+        throw new BrokerError('BROKER_UNAVAILABLE', String(desc), 'FIVE_PAISA', this.environment);
+      }
+    }
+
+    const bodyStatusRaw = data?.body?.Status ?? data?.body?.status;
+    const bodyStatus = bodyStatusRaw !== undefined && bodyStatusRaw !== null ? Number(bodyStatusRaw) : 0;
+    const message = String(data?.body?.Message ?? data?.body?.message ?? '');
+
+    // body.Status = 9 means invalid session / session expired
+    if (bodyStatus === 9) {
+      throw new BrokerError('AUTHENTICATION_FAILED', `5paisa session invalid or expired: ${message || 'Status 9'}`, 'FIVE_PAISA', this.environment);
+    }
+
+    // body.Status = 1 means no orders found for this client (valid successful empty order book)
+    if (bodyStatus === 1) {
+      return [];
+    }
+
+    // body.Status = 0 means success
+    if (bodyStatus === 0) {
+      const orders = data?.body?.OrderBookDetail;
+      if (Array.isArray(orders)) {
+        return orders;
+      }
+      if (orders === null || orders === undefined) {
+        return [];
+      }
+      throw new BrokerError('BROKER_UNAVAILABLE', '5paisa returned an invalid order-book response structure.', 'FIVE_PAISA', this.environment);
+    }
+
+    // Defensive fallback: if message indicates no orders, return []
+    if (message.toLowerCase().includes('no order')) {
+      return [];
+    }
+
+    throw new BrokerError('BROKER_UNAVAILABLE', message || `5paisa OrderBook returned unexpected status ${bodyStatus}`, 'FIVE_PAISA', this.environment);
+  }
+
+  async getOpenOrders(): Promise<NormalizedOrder[]> {
+    const orders = await this.fetchAuthoritativeOrderBook();
     return orders.map(o => this.normalizeBrokerOrder(o)).filter(o => o.status === 'PENDING' || o.status === 'ACCEPTED' || o.status === 'PARTIALLY_FILLED');
   }
 
@@ -715,8 +792,13 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
     });
     if (!res.ok) throw new BrokerError('BROKER_UNAVAILABLE', `5paisa API HTTP ${res.status}: ${res.statusText}`, 'FIVE_PAISA', this.environment);
     const data = await res.json();
-    if (data?.head?.Status !== 0 && data?.head?.Status !== undefined) {
-      throw new BrokerError('BROKER_UNAVAILABLE', data?.head?.StatusDescription || '5paisa API request failed.', 'FIVE_PAISA', this.environment);
+    const headStatusRaw = data?.head?.Status ?? data?.head?.status;
+    if (headStatusRaw !== undefined && headStatusRaw !== null) {
+      const headStatusNum = Number(headStatusRaw);
+      if (Number.isFinite(headStatusNum) && headStatusNum !== 0) {
+        const desc = data?.head?.StatusDescription || data?.head?.statusDescription || data?.head?.Message || '5paisa API request failed.';
+        throw new BrokerError('BROKER_UNAVAILABLE', String(desc), 'FIVE_PAISA', this.environment);
+      }
     }
     return data;
   }
@@ -928,99 +1010,29 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
       throw new BrokerError('AUTHENTICATION_FAILED', '5paisa access token is unavailable.', 'FIVE_PAISA', this.environment);
     }
 
-    const cleanSymbol = String(symbol || '').replace(/^NSE:|^BSE:/, '').trim();
+    const rawSymbol = String(symbol || '').trim();
+    const isBse = rawSymbol.toUpperCase().startsWith('BSE:');
+    const cleanSymbol = rawSymbol.replace(/^NSE:|^BSE:/i, '').trim();
     const looksLikeOption = /(?:^|[_\s-])(CE|PE)$|(?:CE|PE)$/i.test(cleanSymbol);
 
     try {
-      // Option contracts must be queried with their authoritative derivative
-      // ScripCode / ScripData and ExchType=D. The old quote path treated every
-      // symbol as a cash-equity _EQ instrument, so an option Trigger Now could
-      // never obtain the broker quote required by the live safety gate.
-      if (looksLikeOption) {
-        const optionRow = await this.findExactScripMasterRow(cleanSymbol, 'D');
-        if (!optionRow) {
-          throw new BrokerError(
-            'INVALID_SYMBOL',
-            `5paisa ScripMaster has no authoritative option instrument for ${symbol}.`,
-            'FIVE_PAISA',
-            this.environment
-          );
-        }
-
-        const feedRes = await fetch(`${this.getApiHost()}/VendorsAPI/Service1.svc/V1/MarketFeed`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${this.config.accessToken}`,
-            'Content-Type': 'application/json',
-            '5Paisa-API-Uid': 'ka7SFqAU6SC'
-          },
-          body: JSON.stringify({
-            head: { Key: this.config.userKey },
-            body: {
-              Count: '1',
-              MarketFeedData: [{
-                Exch: String(optionRow.Exch || 'N').toUpperCase(),
-                ExchType: 'D',
-                ScripCode: Number(optionRow.ScripCode || 0),
-                ScripData: String(optionRow.ScripData || optionRow.Name || cleanSymbol)
-              }]
-            }
-          })
-        });
-
-        if (!feedRes.ok) {
-          throw new BrokerError(
-            'BROKER_UNAVAILABLE',
-            `5paisa option market feed HTTP ${feedRes.status}: ${feedRes.statusText}`,
-            'FIVE_PAISA',
-            this.environment
-          );
-        }
-
-        const feedData = await feedRes.json();
-        const candidates = [
-          feedData?.body?.Data,
-          feedData?.body?.MarketFeedData,
-          feedData?.body?.MarketFeed,
-          feedData?.Data,
-          feedData?.MarketFeedData
-        ];
-        const item: any = candidates.flatMap(v => Array.isArray(v) ? v : v ? [v] : [])
-          .find((candidate: any) =>
-            String(candidate?.ScripCode || '') === String(optionRow.ScripCode || '')
-            || this.normalizeScripLookupKey(candidate?.ScripData) === this.normalizeScripLookupKey(optionRow.ScripData)
-            || this.normalizeScripLookupKey(candidate?.Symbol) === this.normalizeScripLookupKey(cleanSymbol)
-          );
-
-        const ltp = Number(item?.LastRate ?? item?.LTP ?? item?.Rate ?? 0);
-        const bid = Number(item?.BidPrice ?? item?.BidRate ?? 0);
-        const ask = Number(item?.AskPrice ?? item?.OfferRate ?? item?.OffRate ?? 0);
-        const effectiveBid = bid > 0 ? bid : ltp;
-        const effectiveAsk = ask > 0 ? ask : ltp;
-
-        if (!(ltp > 0 || (effectiveBid > 0 && effectiveAsk > 0))) {
-          throw new BrokerError(
-            'UNAVAILABLE',
-            `5paisa returned no authoritative live option quote for ${symbol}.`,
-            'FIVE_PAISA',
-            this.environment
-          );
-        }
-
-        const anchor = ltp > 0 ? ltp : (effectiveBid + effectiveAsk) / 2;
-        return {
-          symbol,
-          bid: effectiveBid > 0 ? effectiveBid : anchor,
-          ask: effectiveAsk > 0 ? effectiveAsk : anchor,
-          spread: Math.max(0, (effectiveAsk > 0 ? effectiveAsk : anchor) - (effectiveBid > 0 ? effectiveBid : anchor)),
-          timestamp: Date.now(),
-          source: '5PAISA_LIVE_OPTION_FEED',
-          environment: 'LIVE',
-          status: 'FRESH'
-        };
+      // 4. Resolve exact instrument through existing authoritative ScripMaster
+      const targetExchType = looksLikeOption ? 'D' : 'C';
+      let row = await this.findExactScripMasterRow(cleanSymbol, targetExchType);
+      if (!row) {
+        row = await this.findExactScripMasterRow(cleanSymbol);
       }
 
-      const feedRes = await fetch('https://OpenAPI.5paisa.com/VendorsAPI/Service1.svc/V1/MarketFeed', {
+      // 5. Determine exchange, exchange type, scrip code, and scrip data
+      const exch = String(row?.Exch || (isBse ? 'B' : 'N')).toUpperCase();
+      const exchType = String(row?.ExchType || targetExchType).toUpperCase();
+      const rawScripCode = row?.ScripCode ?? (/^\d+$/.test(cleanSymbol) ? Number(cleanSymbol) : 0);
+      const scripCode = Number.isFinite(Number(rawScripCode)) ? Number(rawScripCode) : 0;
+      const scripData = String(row?.ScripData || row?.Name || (scripCode > 0 ? '' : cleanSymbol));
+
+      // 6. Call V2 MarketDepth endpoint
+      const url = `${this.getApiHost()}/VendorsAPI/Service1.svc/V2/MarketDepth`;
+      const res = await fetch(url, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${this.config.accessToken}`,
@@ -1028,46 +1040,123 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
           '5Paisa-API-Uid': 'ka7SFqAU6SC'
         },
         body: JSON.stringify({
-          head: { Key: this.config.userKey },
+          head: {
+            key: this.config.userKey || '',
+            Key: this.config.userKey || ''
+          },
           body: {
-            Count: '1',
-            MarketFeedData: [{
-              Exch: cleanSymbol.startsWith('BSE:') ? 'B' : 'N',
-              ExchType: 'C',
-              ScripData: cleanSymbol.endsWith('_EQ')
-                ? cleanSymbol
-                : `${cleanSymbol}_EQ`
-            }]
+            ClientCode: this.config.clientCode || this.config.userId || '',
+            Exch: exch,
+            ExchType: exchType,
+            ScripCode: scripCode,
+            ScripData: scripCode > 0 ? '' : scripData
           }
         })
       });
 
-      if (!feedRes.ok) {
-        throw new BrokerError('BROKER_UNAVAILABLE', `5paisa market feed HTTP ${feedRes.status}: ${feedRes.statusText}`, 'FIVE_PAISA', this.environment);
+      if (!res.ok) {
+        throw new BrokerError(
+          'BROKER_UNAVAILABLE',
+          `5paisa MarketDepth HTTP ${res.status}: ${res.statusText}`,
+          'FIVE_PAISA',
+          this.environment
+        );
       }
 
-      const feedData = await feedRes.json();
+      const data = await res.json().catch(() => ({}));
+
+      // Normalize head status
+      const headStatusRaw = data?.head?.status ?? data?.head?.Status;
+      if (headStatusRaw !== undefined && headStatusRaw !== null) {
+        const headStatusNum = Number(headStatusRaw);
+        if (Number.isFinite(headStatusNum) && headStatusNum !== 0) {
+          const desc = data?.head?.statusDescription ?? data?.head?.StatusDescription ?? data?.head?.Message ?? '5paisa MarketDepth request failed.';
+          throw new BrokerError('BROKER_UNAVAILABLE', String(desc), 'FIVE_PAISA', this.environment);
+        }
+      }
+
+      // Normalize body status
+      const bodyStatusRaw = data?.body?.Status ?? data?.body?.status;
+      if (bodyStatusRaw !== undefined && bodyStatusRaw !== null) {
+        const bodyStatusNum = Number(bodyStatusRaw);
+        if (bodyStatusNum === 9) {
+          throw new BrokerError('AUTHENTICATION_FAILED', '5paisa session invalid or expired for MarketDepth.', 'FIVE_PAISA', this.environment);
+        }
+        if (Number.isFinite(bodyStatusNum) && bodyStatusNum !== 0) {
+          const msg = data?.body?.Message ?? data?.body?.message ?? '5paisa MarketDepth failed.';
+          throw new BrokerError('UNAVAILABLE', String(msg), 'FIVE_PAISA', this.environment);
+        }
+      }
+
+      // 7. Parse body.MarketDepthData
       const candidates = [
-        feedData?.body?.Data,
-        feedData?.body?.data,
-        feedData?.body?.MarketFeed,
-        feedData?.body?.MarketFeedData
+        data?.body?.MarketDepthData,
+        data?.MarketDepthData,
+        data?.body?.Data,
+        data?.Data
       ];
-      const item: any = candidates.flatMap(v => Array.isArray(v) ? v : v ? [v] : [])[0];
+      const depthArray: any[] = candidates.flatMap(v => Array.isArray(v) ? v : v ? [v] : []);
 
-      const bid = Number(item?.BidPrice);
-      const ask = Number(item?.AskPrice);
-      if (!Number.isFinite(bid) || !Number.isFinite(ask) || bid <= 0 || ask <= 0 || ask < bid) {
-        throw new BrokerError('UNAVAILABLE', `5paisa returned no authoritative bid/ask quote for ${symbol}; authoritative live pricing is unavailable.`, 'FIVE_PAISA', this.environment);
+      // 8. Separate:
+      // BbBuySellFlag = 66 -> BUY/BID side
+      // BbBuySellFlag = 83 -> SELL/ASK side
+      const buyPrices: number[] = [];
+      const sellPrices: number[] = [];
+
+      for (const item of depthArray) {
+        const flagRaw = item?.BbBuySellFlag ?? item?.BuySellFlag ?? item?.Flag;
+        const flagStr = String(flagRaw ?? '').trim().toUpperCase();
+        const price = Number(item?.Price ?? item?.Rate ?? 0);
+
+        if (!Number.isFinite(price) || price <= 0) continue;
+
+        if (flagStr === '66' || flagStr === 'B' || flagRaw === 66) {
+          buyPrices.push(price);
+        } else if (flagStr === '83' || flagStr === 'S' || flagRaw === 83) {
+          sellPrices.push(price);
+        }
       }
 
+      // Fallback: Check MarketFeedData or items with BidPrice/AskPrice
+      if (buyPrices.length === 0 || sellPrices.length === 0) {
+        const feedCandidates = [
+          data?.body?.MarketFeedData,
+          data?.MarketFeedData,
+          data?.body?.Data,
+          data?.Data
+        ];
+        const feedArray: any[] = feedCandidates.flatMap(v => Array.isArray(v) ? v : v ? [v] : []);
+        for (const item of feedArray) {
+          const bp = Number(item?.BidPrice ?? item?.BidRate ?? item?.bestBid ?? 0);
+          const ap = Number(item?.AskPrice ?? item?.AskRate ?? item?.bestAsk ?? 0);
+          if (Number.isFinite(bp) && bp > 0 && buyPrices.length === 0) buyPrices.push(bp);
+          if (Number.isFinite(ap) && ap > 0 && sellPrices.length === 0) sellPrices.push(ap);
+        }
+      }
+
+      // 9. Best bid is highest valid buy-side price
+      const bestBid = buyPrices.length > 0 ? Math.max(...buyPrices) : 0;
+      // 10. Best ask is lowest valid sell-side price
+      const bestAsk = sellPrices.length > 0 ? Math.min(...sellPrices) : 0;
+
+      // 11. Requires: bid > 0, ask > 0, ask >= bid
+      if (!Number.isFinite(bestBid) || !Number.isFinite(bestAsk) || bestBid <= 0 || bestAsk <= 0 || bestAsk < bestBid) {
+        throw new BrokerError(
+          'UNAVAILABLE',
+          `5paisa returned no authoritative bid/ask market depth for ${symbol} (bestBid: ${bestBid}, bestAsk: ${bestAsk}).`,
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+
+      // 12. Return NormalizedQuote
       return {
         symbol,
-        bid,
-        ask,
-        spread: ask - bid,
+        bid: bestBid,
+        ask: bestAsk,
+        spread: Math.max(0, bestAsk - bestBid),
         timestamp: Date.now(),
-        source: '5PAISA_LIVE_API_FEED',
+        source: '5PAISA_LIVE_MARKET_DEPTH',
         environment: 'LIVE',
         status: 'FRESH'
       };
