@@ -13,6 +13,7 @@
     "test:fno-certification": "tsx test/test_fno_certification.ts",
     "test:live-dry-run": "tsx test/test_live_dry_run_certification.ts",
     "test:first-live-certification": "cross-env GOLDCREST_DB_FILE=data/test_first_live_certification.sqlite tsx test/test_first_live_certification.ts",
+    "test:lifecycle-certification": "cross-env GOLDCREST_DB_FILE=data/test_lifecycle_certification.sqlite tsx test/test_lifecycle_certification.ts",
     "test:5paisa-preflight": "cross-env GOLDCREST_DB_FILE=data/test_5paisa_preflight.sqlite tsx test/test_5paisa_live_preflight_certification.ts",
     "test:5paisa-connectivity": "cross-env GOLDCREST_DB_FILE=data/test_5paisa_live_connectivity.sqlite tsx test/test_5paisa_live_connectivity_certification.ts",
     "test:5paisa-connectivity-suite": "cross-env GOLDCREST_DB_FILE=data/test_5paisa_live_connectivity.sqlite tsx test/test_5paisa_live_connectivity_unit.ts",

@@ -246,24 +246,20 @@ export class FirstLiveService {
         if (adapter && typeof adapter.resolveAuthoritativeLiveInstrument === 'function') {
           authInst = await adapter.resolveAuthoritativeLiveInstrument(orderRequest.symbol, orderRequest.market);
         }
-      } catch {
-        // Fallback below
+      } catch (err: any) {
+        return {
+          success: false,
+          reservationToken: null,
+          message: `FIRST_LIVE_RESERVATION_FAILED: Authoritative remote 5paisa instrument unavailable for live order: ${err?.message || err}`
+        };
       }
     }
 
     if (!authInst) {
-      const isDeriv = orderRequest.market === 'INDIAN_OPTIONS' || orderRequest.market === 'INDIAN_FUTURES' || /(?:CE|PE)$/i.test(orderRequest.symbol);
-      const exch = (orderRequest as any).exchange || (orderRequest.symbol.toUpperCase().startsWith('SENSEX') ? 'B' : 'N');
-      const exchType = (orderRequest as any).exchangeType || (isDeriv ? 'D' : 'C');
-      const scrip = (orderRequest as any).scripCode || (orderRequest as any).brokerInstrumentId || '';
-      const lot = Number((orderRequest as any).lotSize || 25);
-      authInst = {
-        exchange: String(exch).toUpperCase(),
-        exchangeType: String(exchType).toUpperCase(),
-        scripCode: scrip,
-        brokerInstrumentId: String(scrip),
-        lotSize: lot,
-        symbol: orderRequest.symbol
+      return {
+        success: false,
+        reservationToken: null,
+        message: 'FIRST_LIVE_RESERVATION_FAILED: Authoritative remote 5paisa instrument is mandatory for LIVE First-Live reservation. Built-in fallbacks are strictly prohibited.'
       };
     }
 

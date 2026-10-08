@@ -562,6 +562,7 @@ function initSchema(db: Database) {
       state TEXT NOT NULL,
       payload_json TEXT NOT NULL,
       result_json TEXT,
+      broker_order_id TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -779,7 +780,8 @@ function initSchema(db: Database) {
     'ALTER TABLE first_live_ledger ADD COLUMN exchange_type TEXT;',
     'ALTER TABLE first_live_ledger ADD COLUMN scrip_code TEXT;',
     'ALTER TABLE first_live_ledger ADD COLUMN broker_instrument_id TEXT;',
-    'ALTER TABLE first_live_ledger ADD COLUMN lot_size REAL;'
+    'ALTER TABLE first_live_ledger ADD COLUMN lot_size REAL;',
+    'ALTER TABLE execution_intents ADD COLUMN broker_order_id TEXT;'
   ];
   try {
     db.run('ALTER TABLE execution_intents ADD COLUMN claim_token TEXT;');
