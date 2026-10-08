@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { FivePaisaLiveAdapter } from '../src/brokers/adapters/fivepaisa/FivePaisaLiveAdapter';
 import { updateSystemConfig } from '../src/services/configService';
 

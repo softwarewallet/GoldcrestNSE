@@ -112,6 +112,11 @@ export class BrokerRegistry {
     return live || null;
   }
 
+  hasAdapter(broker: BrokerType, environment: TradingEnvironment = 'LIVE'): boolean {
+    this.ensureInitialized();
+    return this.adapters.has(`${broker}_${environment}`);
+  }
+
   registerAdapter(broker: BrokerType, environment: TradingEnvironment, adapter: BrokerAdapter): void {
     this.ensureInitialized();
     const key = `${broker}_${environment}`;

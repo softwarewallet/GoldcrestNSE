@@ -78,4 +78,27 @@ try {
   await executeRun(`DELETE FROM account_balance_snapshots WHERE account_id LIKE 'TEST-%'`);
 }
 
+// Session Guard Regression Test:
+// When 5paisa has no active session, captureAccountBalanceSnapshots must not throw
+// and should gracefully handle unauthenticated state.
+{
+  let getAccountCalled = false;
+  brokerRegistry.registerAdapter('FIVE_PAISA', 'LIVE', {
+    hasActiveSession: () => false,
+    getAccount: async () => {
+      getAccountCalled = true;
+      throw new Error('5paisa API requires an Access Token or TOTP session to fetch actual balance.');
+    }
+  } as any);
+
+  const testTime = Date.now();
+  const sessionGuardRows = await captureAccountBalanceSnapshots(testTime);
+  assert.equal(sessionGuardRows.length >= 1, true);
+  assert.equal(getAccountCalled, false, 'getAccount must NOT be called when hasActiveSession() returns false');
+  const fivePaisaSnapshot = sessionGuardRows.find(r => r.broker === 'FIVE_PAISA');
+  assert.ok(fivePaisaSnapshot, 'FIVE_PAISA snapshot must be returned');
+
+  await executeRun('DELETE FROM account_balance_snapshots WHERE captured_at = ?', [testTime]);
+}
+
 console.log('ACCOUNT BALANCE SNAPSHOT TESTS PASSED');

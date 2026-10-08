@@ -1,5 +1,6 @@
 import { executeQuery, executeRun } from '../database/db';
 import { brokerRegistry } from '../brokers/registry';
+import { maskIdentifier } from '../brokers/auditLog';
 import type { BrokerAccountInfo, BrokerType } from '../brokers/types';
 
 export interface AccountBalanceSnapshot {
@@ -64,9 +65,149 @@ export function nextThreeHourBoundary(now = new Date()): Date {
   return next;
 }
 
+async function loadPersistedBrokerAccount(broker: BrokerType): Promise<any | null> {
+  try {
+    const rows = await executeQuery<any>(
+      'SELECT account_json FROM broker_reconciliation_snapshots WHERE broker = ? AND environment = ? ORDER BY timestamp DESC LIMIT 1',
+      [broker, 'LIVE']
+    );
+    const snapshot = rows[0]?.account_json;
+    if (snapshot) {
+      const account = typeof snapshot === 'string' ? JSON.parse(snapshot) : snapshot;
+      if (account && typeof account === 'object' && Number.isFinite(account.balance)) {
+        return account;
+      }
+    }
+  } catch {
+    // Continue to broker_accounts
+  }
+
+  try {
+    const rows = await executeQuery<any>(
+      'SELECT account_id, balance, equity, available_margin, used_margin, free_margin, currency FROM broker_accounts WHERE broker = ? AND environment = ? ORDER BY last_update DESC LIMIT 1',
+      [broker, 'LIVE']
+    );
+    const row = rows[0];
+    if (row && Number.isFinite(row.balance)) {
+      return {
+        accountId: String(row.account_id),
+        balance: Number(row.balance),
+        equity: Number(row.equity),
+        availableMargin: Number(row.available_margin || 0),
+        usedMargin: Number(row.used_margin || 0),
+        freeMargin: Number(row.free_margin || 0),
+        currency: String(row.currency || (broker === 'FIVE_PAISA' ? 'INR' : 'USD'))
+      };
+    }
+  } catch {
+    // Continue to account_balance_snapshots
+  }
+
+  try {
+    const rows = await executeQuery<any>(
+      "SELECT account_id, balance, equity, used_margin, free_margin, currency FROM account_balance_snapshots WHERE broker = ? AND environment = ? AND status = 'CAPTURED' AND balance IS NOT NULL ORDER BY captured_at DESC LIMIT 1",
+      [broker, 'LIVE']
+    );
+    const row = rows[0];
+    if (row && Number.isFinite(row.balance)) {
+      return {
+        accountId: String(row.account_id),
+        balance: Number(row.balance),
+        equity: Number(row.equity),
+        availableMargin: Number(row.free_margin || 0),
+        usedMargin: Number(row.used_margin || 0),
+        freeMargin: Number(row.free_margin || 0),
+        currency: String(row.currency || (broker === 'FIVE_PAISA' ? 'INR' : 'USD'))
+      };
+    }
+  } catch {
+    // Return null
+  }
+  return null;
+}
+
 async function captureBrokerBalance(broker: BrokerType, capturedAt: number): Promise<AccountBalanceSnapshot> {
   try {
     const adapter = brokerRegistry.getAdapter(broker, 'LIVE');
+
+    // If broker adapter has hasActiveSession() check and session is not active yet (e.g. awaiting daily 2FA/TOTP)
+    if (typeof (adapter as any).hasActiveSession === 'function' && !(adapter as any).hasActiveSession()) {
+      const persisted = await loadPersistedBrokerAccount(broker);
+      if (persisted && Number.isFinite(persisted.balance) && Number.isFinite(persisted.equity)) {
+        const snapshot: AccountBalanceSnapshot = {
+          id: snapshotId(broker, capturedAt),
+          broker,
+          environment: 'LIVE',
+          accountId: maskIdentifier(String(persisted.accountId || '****')),
+          currency: String(persisted.currency || (broker === 'FIVE_PAISA' ? 'INR' : 'USD')),
+          capturedAt,
+          balance: Number(persisted.balance),
+          equity: Number(persisted.equity),
+          usedMargin: Number(persisted.usedMargin ?? 0),
+          freeMargin: Number(persisted.freeMargin ?? persisted.availableMargin ?? 0),
+          status: 'CAPTURED'
+        };
+
+        await executeRun(
+          `INSERT OR REPLACE INTO account_balance_snapshots
+           (id, broker, environment, account_id, currency, captured_at, balance, equity, used_margin, free_margin, status, error_message)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            snapshot.id,
+            snapshot.broker,
+            snapshot.environment,
+            snapshot.accountId,
+            snapshot.currency,
+            snapshot.capturedAt,
+            snapshot.balance,
+            snapshot.equity,
+            snapshot.usedMargin,
+            snapshot.freeMargin,
+            snapshot.status,
+            null
+          ]
+        );
+        return snapshot;
+      }
+
+      // No persisted snapshot yet and session is awaiting login
+      const snapshot: AccountBalanceSnapshot = {
+        id: snapshotId(broker, capturedAt),
+        broker,
+        environment: 'LIVE',
+        accountId: '****',
+        currency: broker === 'FIVE_PAISA' ? 'INR' : '',
+        capturedAt,
+        balance: null,
+        equity: null,
+        usedMargin: null,
+        freeMargin: null,
+        status: 'ERROR',
+        errorMessage: 'Awaiting daily 5paisa TOTP authentication session or Access Token'
+      };
+
+      await executeRun(
+        `INSERT OR REPLACE INTO account_balance_snapshots
+         (id, broker, environment, account_id, currency, captured_at, balance, equity, used_margin, free_margin, status, error_message)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          snapshot.id,
+          snapshot.broker,
+          snapshot.environment,
+          snapshot.accountId,
+          snapshot.currency,
+          snapshot.capturedAt,
+          null,
+          null,
+          null,
+          null,
+          snapshot.status,
+          snapshot.errorMessage
+        ]
+      );
+      return snapshot;
+    }
+
     const account: BrokerAccountInfo = await adapter.getAccount();
 
     const balance = Number(account.balance);
@@ -82,7 +223,7 @@ async function captureBrokerBalance(broker: BrokerType, capturedAt: number): Pro
       id: snapshotId(broker, capturedAt),
       broker,
       environment: 'LIVE',
-      accountId: String(account.accountId || '****'),
+      accountId: maskIdentifier(String(account.accountId || '****')),
       currency: String(account.currency || ''),
       capturedAt,
       balance,
@@ -115,6 +256,50 @@ async function captureBrokerBalance(broker: BrokerType, capturedAt: number): Pro
     return snapshot;
   } catch (err: any) {
     const message = err?.message || String(err);
+    const isAuthPending = message.includes('Access Token or TOTP session') ||
+      message.includes('requires an Access Token') ||
+      message.includes('TOTP') ||
+      message.includes('Awaiting daily');
+
+    // Attempt persisted fallback
+    const persisted = await loadPersistedBrokerAccount(broker);
+    if (persisted && Number.isFinite(persisted.balance) && Number.isFinite(persisted.equity)) {
+      const snapshot: AccountBalanceSnapshot = {
+        id: snapshotId(broker, capturedAt),
+        broker,
+        environment: 'LIVE',
+        accountId: maskIdentifier(String(persisted.accountId || '****')),
+        currency: String(persisted.currency || (broker === 'FIVE_PAISA' ? 'INR' : 'USD')),
+        capturedAt,
+        balance: Number(persisted.balance),
+        equity: Number(persisted.equity),
+        usedMargin: Number(persisted.usedMargin ?? 0),
+        freeMargin: Number(persisted.freeMargin ?? persisted.availableMargin ?? 0),
+        status: 'CAPTURED'
+      };
+
+      await executeRun(
+        `INSERT OR REPLACE INTO account_balance_snapshots
+         (id, broker, environment, account_id, currency, captured_at, balance, equity, used_margin, free_margin, status, error_message)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          snapshot.id,
+          snapshot.broker,
+          snapshot.environment,
+          snapshot.accountId,
+          snapshot.currency,
+          snapshot.capturedAt,
+          snapshot.balance,
+          snapshot.equity,
+          snapshot.usedMargin,
+          snapshot.freeMargin,
+          snapshot.status,
+          null
+        ]
+      );
+      return snapshot;
+    }
+
     const snapshot: AccountBalanceSnapshot = {
       id: snapshotId(broker, capturedAt),
       broker,
@@ -150,7 +335,9 @@ async function captureBrokerBalance(broker: BrokerType, capturedAt: number): Pro
       ]
     );
 
-    console.warn(`[Goldcrest] account balance snapshot failed for ${broker}: ${message}`);
+    if (!isAuthPending) {
+      console.warn(`[Goldcrest] account balance snapshot failed for ${broker}: ${message}`);
+    }
     return snapshot;
   }
 }
@@ -158,9 +345,13 @@ async function captureBrokerBalance(broker: BrokerType, capturedAt: number): Pro
 export async function captureAccountBalanceSnapshots(capturedAt = Date.now()): Promise<AccountBalanceSnapshot[]> {
   await ensureTable();
   const timestamp = Number(capturedAt);
-  return Promise.all([
-    captureBrokerBalance('FIVE_PAISA', timestamp)
-  ]);
+  const brokersToCapture: BrokerType[] = ['FIVE_PAISA'];
+  if (brokerRegistry.hasAdapter('CTRADER', 'LIVE')) {
+    brokersToCapture.unshift('CTRADER');
+  }
+  return Promise.all(
+    brokersToCapture.map(broker => captureBrokerBalance(broker, timestamp))
+  );
 }
 
 export async function getAccountBalanceSnapshots(options: {
@@ -224,7 +415,11 @@ async function captureStartupSnapshotsIfNeeded(): Promise<void> {
   const recentBrokers = new Set(
     recentRows.map(row => String(row.broker || '').toUpperCase())
   );
-  const missingBrokers = (['FIVE_PAISA'] as BrokerType[])
+  const brokersToCheck: BrokerType[] = ['FIVE_PAISA'];
+  if (brokerRegistry.hasAdapter('CTRADER', 'LIVE')) {
+    brokersToCheck.unshift('CTRADER');
+  }
+  const missingBrokers = brokersToCheck
     .filter(broker => !recentBrokers.has(broker));
 
   if (missingBrokers.length === 0) return;
