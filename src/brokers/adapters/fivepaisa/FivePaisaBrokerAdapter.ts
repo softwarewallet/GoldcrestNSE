@@ -1769,6 +1769,38 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
     return normalized;
   }
 
+  /**
+   * Helper to verify if an orderId belongs to a known Goldcrest execution intent or First-Live ledger entry.
+   * Fails closed with LIFECYCLE_AUTHORIZATION_DATABASE_ERROR if the database query fails.
+   * Throws FIRST_LIVE_ORDER_NOT_AUTHORIZED if zero matching rows exist.
+   */
+  private async assertGoldcrestLifecycleOwnership(orderId: string, actionName: 'modification' | 'cancellation'): Promise<void> {
+    let knownIntentRows: any[];
+    try {
+      knownIntentRows = await executeQuery<any>(
+        "SELECT 1 FROM first_live_ledger WHERE broker_order_id = ? OR id = ? OR reservation_token = ? UNION SELECT 1 FROM execution_intents WHERE broker_order_id = ? OR idempotency_key = ? LIMIT 1",
+        [orderId, orderId, orderId, orderId, orderId]
+      );
+    } catch (dbErr: any) {
+      throw new BrokerError(
+        'LIFECYCLE_AUTHORIZATION_DATABASE_ERROR',
+        'Lifecycle authorization could not be verified because the authorization database query failed.',
+        'FIVE_PAISA',
+        this.environment,
+        dbErr
+      );
+    }
+
+    if (!knownIntentRows || knownIntentRows.length === 0) {
+      throw new BrokerError(
+        'FIRST_LIVE_ORDER_NOT_AUTHORIZED',
+        `FIRST_LIVE_ORDER_NOT_AUTHORIZED: Order ${actionName} is not authorized for an unknown or unrelated order.`,
+        'FIVE_PAISA',
+        this.environment
+      );
+    }
+  }
+
   async modifyOrder(orderId: string, modifications: OrderModification): Promise<NormalizedOrder> {
     if (killSwitch.isHalted()) {
       throw new BrokerError('EMERGENCY_STOP_ACTIVE', 'Emergency stop is active. Modifying live orders is blocked.', 'FIVE_PAISA', this.environment);
@@ -1792,20 +1824,8 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
     );
     if (!target?.ExchOrderID) throw new BrokerError('ORDER_REJECTED', '5paisa authoritative order book did not contain the requested exchange order ID.', 'FIVE_PAISA', this.environment);
 
-    // Lifecycle authorization check (Requirements 7, 8, 9)
-    const knownIntentRows = await executeQuery<any>(
-      "SELECT 1 FROM first_live_ledger WHERE broker_order_id = ? OR id = ? OR reservation_token = ? UNION SELECT 1 FROM execution_intents WHERE broker_order_id = ? OR idempotency_key = ? LIMIT 1",
-      [orderId, orderId, orderId, orderId, orderId]
-    ).catch(() => []);
-
-    if (!knownIntentRows || knownIntentRows.length === 0) {
-      throw new BrokerError(
-        'FIRST_LIVE_ORDER_NOT_AUTHORIZED',
-        'FIRST_LIVE_ORDER_NOT_AUTHORIZED: Order modification is not authorized for an unknown or unrelated order.',
-        'FIVE_PAISA',
-        this.environment
-      );
-    }
+    // Lifecycle authorization check
+    await this.assertGoldcrestLifecycleOwnership(orderId, 'modification');
 
     const payload: Record<string, unknown> = {
       ExchangeOrderID: undefined,
@@ -1865,19 +1885,7 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
 
     // In normal operation (non-emergency stop), verify order belongs to known Goldcrest lifecycle
     if (!isEmergencyStop) {
-      const knownIntentRows = await executeQuery<any>(
-        "SELECT 1 FROM first_live_ledger WHERE broker_order_id = ? OR id = ? OR reservation_token = ? UNION SELECT 1 FROM execution_intents WHERE broker_order_id = ? OR idempotency_key = ? LIMIT 1",
-        [orderId, orderId, orderId, orderId, orderId]
-      ).catch(() => []);
-
-      if (!knownIntentRows || knownIntentRows.length === 0) {
-        throw new BrokerError(
-          'FIRST_LIVE_ORDER_NOT_AUTHORIZED',
-          'FIRST_LIVE_ORDER_NOT_AUTHORIZED: Order cancellation is not authorized for an unknown or unrelated order.',
-          'FIVE_PAISA',
-          this.environment
-        );
-      }
+      await this.assertGoldcrestLifecycleOwnership(orderId, 'cancellation');
     }
 
     const payload = { ExchOrderID: String(target.ExchOrderID) };

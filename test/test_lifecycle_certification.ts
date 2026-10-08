@@ -17,13 +17,19 @@ resetDatabaseInstanceForTesting();
 
 const originalFetch = global.fetch;
 let fetchCallsCount = 0;
+let modifyRequestsSent = 0;
+let cancelRequestsSent = 0;
 let mockFetchHandler: ((url: string, init?: any) => any) | null = null;
 
 global.fetch = function (url: any, init: any) {
   fetchCallsCount++;
+  const urlStr = String(url);
+  if (urlStr.includes('ModifyOrderRequest')) modifyRequestsSent++;
+  if (urlStr.includes('CancelOrderRequest')) cancelRequestsSent++;
+
   if (mockFetchHandler) {
     try {
-      return mockFetchHandler(String(url), init);
+      return mockFetchHandler(urlStr, init);
     } catch (err: any) {
       return Promise.reject(err);
     }
@@ -89,7 +95,7 @@ async function runLifecycleCertification() {
   }
   console.log('  ✓ First-Live reservation succeeded.');
 
-  // Mock successful PlaceOrderRequest returning BrokerOrderID '987654321'
+  // Mock successful 5paisa OpenAPI responses
   mockFetchHandler = (url, init) => {
     if (url.includes('PlaceOrderRequest')) {
       return Promise.resolve(new Response(JSON.stringify({
@@ -98,8 +104,13 @@ async function runLifecycleCertification() {
       })));
     }
     if (url.includes('OrderBook')) {
-      const isUnknown = (init?.body && typeof init.body === 'string' && init.body.includes('UNKNOWN_ORDER_999')) || (global as any).__lastCancelledOrderId === 'UNKNOWN_ORDER_999';
-      const requestedId = isUnknown ? 'UNKNOWN_ORDER_999' : '987654321';
+      let requestedId = '987654321';
+      const bodyStr = init?.body && typeof init.body === 'string' ? init.body : '';
+      if (bodyStr.includes('777666555') || (global as any).__lastTargetOrderId === '777666555') {
+        requestedId = '777666555';
+      } else if (bodyStr.includes('UNKNOWN_ORDER_999') || (global as any).__lastTargetOrderId === 'UNKNOWN_ORDER_999') {
+        requestedId = 'UNKNOWN_ORDER_999';
+      }
       return Promise.resolve(new Response(JSON.stringify({
         head: { status: '0', statusDescription: 'Success' },
         body: {
@@ -116,16 +127,6 @@ async function runLifecycleCertification() {
             }
           ]
         }
-      })));
-    }
-    if (url.includes('CancelOrderRequest')) {
-      try {
-        const parsed = JSON.parse(init?.body || '{}');
-        (global as any).__lastCancelledOrderId = parsed.ExchOrderID;
-      } catch {}
-      return Promise.resolve(new Response(JSON.stringify({
-        head: { status: '0', statusDescription: 'Success' },
-        body: { Status: 0, Message: 'Success' }
       })));
     }
     if (url.includes('ModifyOrderRequest')) {
@@ -150,7 +151,7 @@ async function runLifecycleCertification() {
     _firstLiveCorrelationId: 'life-corr-1'
   };
 
-  // Switch mode to FIRST_LIVE_CERTIFICATION for modify/cancel lifecycle testing
+  // Switch mode to FIRST_LIVE_CERTIFICATION for testing
   await executeRun("UPDATE system_settings SET value = 'FIRST_LIVE_CERTIFICATION' WHERE key = 'EXECUTION_MODE'");
   updateSystemConfig({
     executionMode: 'FIRST_LIVE_CERTIFICATION',
@@ -165,15 +166,32 @@ async function runLifecycleCertification() {
   }
   console.log('  ✓ Placed order successfully with brokerOrderId 987654321.');
 
-  // Store brokerOrderId in first_live_ledger for ownership lookup
+  // Run PRODUCTION finalization service rather than manual SQL update
+  await firstLiveService.finalizeFirstLiveOrder({
+    reservationToken: reservation.reservationToken,
+    status: 'ACCEPTED',
+    brokerOrderId: placed.brokerOrderId,
+    result: placed
+  });
+
+  // Re-enable FIRST_LIVE_CERTIFICATION mode for lifecycle mutation testing (since finalizeFirstLiveOrder automatically locks mode to LIVE_DRY_RUN)
+  updateSystemConfig({
+    executionMode: 'FIRST_LIVE_CERTIFICATION'
+  });
+
+  // Verify production finalization populated broker_order_id in first_live_ledger
   const tokenHash = hashReservationToken(reservation.reservationToken);
-  await executeRun("UPDATE first_live_ledger SET broker_order_id = ? WHERE id = ?", ['987654321', tokenHash]);
+  const ledgerRows = await executeQuery<any>('SELECT broker_order_id FROM first_live_ledger WHERE id = ?', [tokenHash]);
+  if (ledgerRows[0]?.broker_order_id !== '987654321') {
+    throw new Error(`FAILED: Production finalization did not populate broker_order_id '987654321'. Got: ${ledgerRows[0]?.broker_order_id}`);
+  }
+  console.log('  ✓ End-to-end First-Live ownership persistence verified (broker_order_id = 987654321).');
 
   // ----------------------------------------------------------------
-  // POSITIVE MODIFY TEST
+  // POSITIVE MODIFY TEST (First-Live Ledger Ownership)
   // ----------------------------------------------------------------
-  console.log('\n[Positive Modify] Testing modification of known Goldcrest order...');
-  fetchCallsCount = 0;
+  console.log('\n[Positive Modify] Testing modification of known Goldcrest First-Live order...');
+  (global as any).__lastTargetOrderId = '987654321';
   const modified = await adapter.modifyOrder('987654321', { price: 55 });
   if (!modified) {
     throw new Error('FAILED: Authorized modifyOrder returned falsy result.');
@@ -181,15 +199,49 @@ async function runLifecycleCertification() {
   console.log('  ✓ Positive modifyOrder passed successfully.');
 
   // ----------------------------------------------------------------
-  // NEGATIVE MODIFY TEST (Unknown Order ID)
+  // POSITIVE CANCEL TEST (First-Live Ledger Ownership)
+  // ----------------------------------------------------------------
+  console.log('\n[Positive Cancel] Testing cancellation of known Goldcrest First-Live order...');
+  (global as any).__lastTargetOrderId = '987654321';
+  const canceled = await adapter.cancelOrder('987654321');
+  if (!canceled) {
+    throw new Error('FAILED: Authorized cancelOrder returned false.');
+  }
+  console.log('  ✓ Positive cancelOrder passed successfully.');
+
+  // ----------------------------------------------------------------
+  // EXECUTION INTENTS OWNERSHIP TEST
+  // ----------------------------------------------------------------
+  console.log('\n[Execution Intent Ownership] Testing lifecycle authorization via execution_intents.broker_order_id...');
+  await executeRun(
+    `INSERT INTO execution_intents (idempotency_key, claim_token, broker, market, symbol, side, state, payload_json, result_json, broker_order_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ['intent-idem-777', 'intent-claim-777', 'FIVE_PAISA', 'INDIAN_OPTIONS', 'NIFTY26OCT23500CE', 'BUY', 'COMPLETED', '{}', '{}', '777666555', Date.now(), Date.now()]
+  );
+
+  (global as any).__lastTargetOrderId = '777666555';
+  const intentModified = await adapter.modifyOrder('777666555', { price: 52 });
+  if (!intentModified) {
+    throw new Error('FAILED: Modify via execution_intents ownership failed.');
+  }
+  console.log('  ✓ modifyOrder authorized via execution_intents.broker_order_id.');
+
+  const intentCanceled = await adapter.cancelOrder('777666555');
+  if (!intentCanceled) {
+    throw new Error('FAILED: Cancel via execution_intents ownership failed.');
+  }
+  console.log('  ✓ cancelOrder authorized via execution_intents.broker_order_id.');
+
+  // ----------------------------------------------------------------
+  // NEGATIVE TESTS (Unknown Order ID)
   // ----------------------------------------------------------------
   console.log('\n[Negative Modify] Testing modification of unknown broker order...');
-  fetchCallsCount = 0;
+  (global as any).__lastTargetOrderId = 'UNKNOWN_ORDER_999';
   let unknownModifyCaught = false;
   try {
     await adapter.modifyOrder('UNKNOWN_ORDER_999', { price: 60 });
   } catch (err: any) {
-    if (err.message.includes('FIRST_LIVE_ORDER_NOT_AUTHORIZED') || err.message.includes('not contain')) {
+    if (err.message.includes('FIRST_LIVE_ORDER_NOT_AUTHORIZED') || err.code === 'FIRST_LIVE_ORDER_NOT_AUTHORIZED') {
       unknownModifyCaught = true;
     }
   }
@@ -198,28 +250,13 @@ async function runLifecycleCertification() {
   }
   console.log('  ✓ Negative modifyOrder correctly blocked unknown order.');
 
-  // ----------------------------------------------------------------
-  // POSITIVE CANCEL TEST
-  // ----------------------------------------------------------------
-  console.log('\n[Positive Cancel] Testing cancellation of known Goldcrest order...');
-  fetchCallsCount = 0;
-  const canceled = await adapter.cancelOrder('987654321');
-  if (!canceled) {
-    throw new Error('FAILED: Authorized cancelOrder returned false.');
-  }
-  console.log('  ✓ Positive cancelOrder passed successfully.');
-
-  // ----------------------------------------------------------------
-  // NEGATIVE CANCEL TEST (Unknown Order ID)
-  // ----------------------------------------------------------------
   console.log('\n[Negative Cancel] Testing cancellation of unknown broker order...');
-  (global as any).__lastCancelledOrderId = 'UNKNOWN_ORDER_999';
-  fetchCallsCount = 0;
+  (global as any).__lastTargetOrderId = 'UNKNOWN_ORDER_999';
   let unknownCancelCaught = false;
   try {
     await adapter.cancelOrder('UNKNOWN_ORDER_999');
   } catch (err: any) {
-    if (err.message.includes('FIRST_LIVE_ORDER_NOT_AUTHORIZED')) {
+    if (err.message.includes('FIRST_LIVE_ORDER_NOT_AUTHORIZED') || err.code === 'FIRST_LIVE_ORDER_NOT_AUTHORIZED') {
       unknownCancelCaught = true;
     }
   }
@@ -227,6 +264,58 @@ async function runLifecycleCertification() {
     throw new Error('FAILED: Allowed cancelOrder on unknown order ID!');
   }
   console.log('  ✓ Negative cancelOrder correctly blocked unknown order.');
+
+  // ----------------------------------------------------------------
+  // DATABASE ERROR HANDLING TEST
+  // ----------------------------------------------------------------
+  console.log('\n[Database Error Test] Testing database authorization error handling...');
+  (global as any).__lastTargetOrderId = '987654321';
+  const initModifyCount = modifyRequestsSent;
+  const initCancelCount = cancelRequestsSent;
+
+  // Temporarily alter query behavior or rename table to trigger DB query error
+  await executeRun('ALTER TABLE execution_intents RENAME TO execution_intents_temp');
+
+  let dbModifyErrorCaught = false;
+  try {
+    await adapter.modifyOrder('987654321', { price: 58 });
+  } catch (err: any) {
+    if (err.code === 'LIFECYCLE_AUTHORIZATION_DATABASE_ERROR' && err.message.includes('Lifecycle authorization could not be verified')) {
+      dbModifyErrorCaught = true;
+    } else {
+      console.error('Unexpected error on DB modify test:', err);
+    }
+  }
+
+  let dbCancelErrorCaught = false;
+  try {
+    await adapter.cancelOrder('987654321');
+  } catch (err: any) {
+    if (err.code === 'LIFECYCLE_AUTHORIZATION_DATABASE_ERROR' && err.message.includes('Lifecycle authorization could not be verified')) {
+      dbCancelErrorCaught = true;
+    } else {
+      console.error('Unexpected error on DB cancel test:', err);
+    }
+  }
+
+  // Restore table name
+  await executeRun('ALTER TABLE execution_intents_temp RENAME TO execution_intents');
+
+  if (!dbModifyErrorCaught) {
+    throw new Error('FAILED: Database error on modifyOrder did not produce LIFECYCLE_AUTHORIZATION_DATABASE_ERROR!');
+  }
+  if (!dbCancelErrorCaught) {
+    throw new Error('FAILED: Database error on cancelOrder did not produce LIFECYCLE_AUTHORIZATION_DATABASE_ERROR!');
+  }
+
+  const modifyNetTransmissions = modifyRequestsSent - initModifyCount;
+  const cancelNetTransmissions = cancelRequestsSent - initCancelCount;
+
+  if (modifyNetTransmissions !== 0 || cancelNetTransmissions !== 0) {
+    throw new Error(`FAILED: Network transmissions occurred during database authorization error! Modify: ${modifyNetTransmissions}, Cancel: ${cancelNetTransmissions}`);
+  }
+
+  console.log('  ✓ Database authorization query error correctly failed-closed with zero network transmissions.');
 
   // Clean up
   try {
