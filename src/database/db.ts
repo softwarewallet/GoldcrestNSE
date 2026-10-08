@@ -543,7 +543,12 @@ function initSchema(db: Database) {
       attempted_at INTEGER NOT NULL,
       reconciled_at INTEGER,
       payload_json TEXT NOT NULL,
-      result_json TEXT
+      result_json TEXT,
+      exchange TEXT,
+      exchange_type TEXT,
+      scrip_code TEXT,
+      broker_instrument_id TEXT,
+      lot_size REAL
     );
 
     -- 30. Autonomous Execution Idempotency
@@ -769,7 +774,12 @@ function initSchema(db: Database) {
     'ALTER TABLE live_trade_research ADD COLUMN max_adverse_price REAL;',
     'ALTER TABLE live_trade_research ADD COLUMN holding_duration_ms INTEGER;',
     'ALTER TABLE first_live_ledger ADD COLUMN reservation_token TEXT;',
-    'ALTER TABLE first_live_ledger ADD COLUMN fingerprint TEXT;'
+    'ALTER TABLE first_live_ledger ADD COLUMN fingerprint TEXT;',
+    'ALTER TABLE first_live_ledger ADD COLUMN exchange TEXT;',
+    'ALTER TABLE first_live_ledger ADD COLUMN exchange_type TEXT;',
+    'ALTER TABLE first_live_ledger ADD COLUMN scrip_code TEXT;',
+    'ALTER TABLE first_live_ledger ADD COLUMN broker_instrument_id TEXT;',
+    'ALTER TABLE first_live_ledger ADD COLUMN lot_size REAL;'
   ];
   try {
     db.run('ALTER TABLE execution_intents ADD COLUMN claim_token TEXT;');

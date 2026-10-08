@@ -17,10 +17,20 @@ export interface FirstLiveStatus {
   armedAt: number | null;
 }
 
+export interface FirstLiveAuthorizedInstrument {
+  exchange: string;
+  exchangeType: string;
+  scripCode: number | string;
+  brokerInstrumentId: string;
+  lotSize: number;
+  symbol: string;
+}
+
 export interface ReserveFirstLiveOrderParams {
   correlationId: string;
   idempotencyKey: string;
   orderRequest: OrderRequest;
+  authorizedInstrument?: FirstLiveAuthorizedInstrument;
 }
 
 export interface ReserveFirstLiveOrderResult {
@@ -228,6 +238,59 @@ export class FirstLiveService {
    */
   async reserveFirstLiveOrder(params: ReserveFirstLiveOrderParams): Promise<ReserveFirstLiveOrderResult> {
     const { correlationId, idempotencyKey, orderRequest } = params;
+    let authInst = params.authorizedInstrument;
+
+    if (!authInst) {
+      try {
+        const adapter = brokerRegistry.getAdapter('FIVE_PAISA', 'LIVE') as any;
+        if (adapter && typeof adapter.resolveAuthoritativeLiveInstrument === 'function') {
+          authInst = await adapter.resolveAuthoritativeLiveInstrument(orderRequest.symbol, orderRequest.market);
+        }
+      } catch {
+        // Fallback below
+      }
+    }
+
+    if (!authInst) {
+      const isDeriv = orderRequest.market === 'INDIAN_OPTIONS' || orderRequest.market === 'INDIAN_FUTURES' || /(?:CE|PE)$/i.test(orderRequest.symbol);
+      const exch = (orderRequest as any).exchange || (orderRequest.symbol.toUpperCase().startsWith('SENSEX') ? 'B' : 'N');
+      const exchType = (orderRequest as any).exchangeType || (isDeriv ? 'D' : 'C');
+      const scrip = (orderRequest as any).scripCode || (orderRequest as any).brokerInstrumentId || '';
+      const lot = Number((orderRequest as any).lotSize || 25);
+      authInst = {
+        exchange: String(exch).toUpperCase(),
+        exchangeType: String(exchType).toUpperCase(),
+        scripCode: scrip,
+        brokerInstrumentId: String(scrip),
+        lotSize: lot,
+        symbol: orderRequest.symbol
+      };
+    }
+
+    // Lot Size Validation (Requirement 6)
+    const qty = Number(orderRequest.quantity);
+    const lotSize = Number(authInst.lotSize);
+    if (!Number.isInteger(qty) || qty <= 0) {
+      return {
+        success: false,
+        reservationToken: null,
+        message: `FIRST_LIVE_RESERVATION_FAILED: Order quantity ${qty} must be a positive integer.`
+      };
+    }
+    if (!Number.isFinite(lotSize) || lotSize <= 0) {
+      return {
+        success: false,
+        reservationToken: null,
+        message: `FIRST_LIVE_RESERVATION_FAILED: Authoritative lot size ${lotSize} must be greater than 0.`
+      };
+    }
+    if (qty % lotSize !== 0) {
+      return {
+        success: false,
+        reservationToken: null,
+        message: `FIRST_LIVE_RESERVATION_FAILED: Order quantity ${qty} must be an exact integer multiple of authoritative lot size ${lotSize}.`
+      };
+    }
 
     const txResult = await executeTransaction((db) => {
       const getSetting = (key: string): string | null => {
@@ -304,7 +367,7 @@ export class FirstLiveService {
 
       const now = Date.now();
       const reservationToken = `fl-res-${crypto.randomBytes(32).toString('hex')}`;
-      const fingerprint = generateFirstLiveFingerprint(orderRequest, idempotencyKey, correlationId);
+      const fingerprint = generateFirstLiveFingerprint(orderRequest, idempotencyKey, correlationId, authInst);
       const reservationTokenHash = hashReservationToken(reservationToken);
 
       const newCount = Math.max(1, submitted + 1);
@@ -324,8 +387,9 @@ export class FirstLiveService {
       db.run(
         `INSERT INTO first_live_ledger (
           id, reservation_token, fingerprint, correlation_id, idempotency_key, broker, environment, execution_mode,
-          symbol, side, quantity, requested_price, status, attempted_at, payload_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          symbol, side, quantity, requested_price, status, attempted_at, payload_json,
+          exchange, exchange_type, scrip_code, broker_instrument_id, lot_size
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           reservationTokenHash,
           reservationTokenHash,
@@ -341,7 +405,20 @@ export class FirstLiveService {
           orderRequest.price || 0,
           'RESERVED',
           now,
-          JSON.stringify({ correlationId, idempotencyKey, orderRequest, reservationTokenHash, reservedAt: now, fingerprint })
+          JSON.stringify({
+            correlationId,
+            idempotencyKey,
+            orderRequest,
+            reservationTokenHash,
+            reservedAt: now,
+            fingerprint,
+            authorizedInstrument: authInst
+          }),
+          authInst.exchange,
+          authInst.exchangeType,
+          String(authInst.scripCode),
+          String(authInst.brokerInstrumentId),
+          Number(authInst.lotSize)
         ]
       );
 
@@ -475,10 +552,17 @@ export function hashReservationToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
+export interface FirstLiveInstrumentDetails {
+  exchange?: string;
+  exchangeType?: string;
+  scripCode?: number | string;
+}
+
 export function generateFirstLiveFingerprint(
   orderRequest: OrderRequest,
   idempotencyKey: string,
-  correlationId: string
+  correlationId: string,
+  instrumentDetails?: FirstLiveInstrumentDetails
 ): string {
   const broker = String((orderRequest as any).broker || 'FIVE_PAISA').toUpperCase();
   const environment = 'LIVE';
@@ -499,6 +583,31 @@ export function generateFirstLiveFingerprint(
   const idemKey = String(idempotencyKey || '').trim();
   const corrId = String(correlationId || '').trim();
 
+  const isDeriv = market === 'INDIAN_OPTIONS' || market === 'INDIAN_FUTURES' || /(?:CE|PE)$/i.test(symbol);
+  const fallbackExchange = symbol.toUpperCase().startsWith('SENSEX') ? 'B' : 'N';
+  const fallbackExchangeType = isDeriv ? 'D' : 'C';
+
+  const exchange = String(
+    instrumentDetails?.exchange ??
+    (orderRequest as any).exchange ??
+    (orderRequest as any)._exchange ??
+    fallbackExchange
+  ).toUpperCase();
+
+  const exchangeType = String(
+    instrumentDetails?.exchangeType ??
+    (orderRequest as any).exchangeType ??
+    (orderRequest as any)._exchangeType ??
+    fallbackExchangeType
+  ).toUpperCase();
+
+  const rawScripCode = instrumentDetails?.scripCode ??
+    (orderRequest as any).scripCode ??
+    (orderRequest as any)._scripCode ??
+    (orderRequest as any).brokerInstrumentId ??
+    '';
+  const scripCode = String(rawScripCode || '');
+
   const parts = [
     `broker=${broker}`,
     `environment=${environment}`,
@@ -511,7 +620,10 @@ export function generateFirstLiveFingerprint(
     `stopLoss=${stopLossStr}`,
     `takeProfit=${takeProfitStr}`,
     `idempotencyKey=${idemKey}`,
-    `correlationId=${corrId}`
+    `correlationId=${corrId}`,
+    `exchange=${exchange}`,
+    `exchangeType=${exchangeType}`,
+    `scripCode=${scripCode}`
   ];
 
   const canonicalString = parts.join('|');

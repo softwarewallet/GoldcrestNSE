@@ -1170,11 +1170,33 @@ brokerRouter.post('/order', async (req: Request, res: Response) => {
         });
       }
 
+      let authorizedInstrument;
+      if (typeof (adapter as any).resolveAuthoritativeLiveInstrument === 'function') {
+        try {
+          authorizedInstrument = await (adapter as any).resolveAuthoritativeLiveInstrument(orderReq.symbol, orderReq.market);
+        } catch (authErr: any) {
+          await failExecutionIntent(idempotencyKey, {
+            broker,
+            market: orderReq.market,
+            symbol: orderReq.symbol,
+            submissionState: 'REJECTED_OR_FAILED',
+            error: authErr?.message || String(authErr),
+            code: authErr?.code || 'AUTHORITATIVE_INSTRUMENT_UNAVAILABLE',
+            failedAt: Date.now()
+          });
+          return res.status(403).json({
+            error: authErr?.message || 'Authoritative instrument unavailable for live execution',
+            code: authErr?.code || 'AUTHORITATIVE_INSTRUMENT_UNAVAILABLE'
+          });
+        }
+      }
+
       const correlationId = orderReq.signalId || orderReq.strategyId || idempotencyKey || `fl-corr-${Date.now()}`;
       const reservation = await firstLiveService.reserveFirstLiveOrder({
         correlationId,
         idempotencyKey,
-        orderRequest: orderReq
+        orderRequest: orderReq,
+        authorizedInstrument
       });
 
       if (!reservation.success || !reservation.reservationToken) {

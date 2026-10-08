@@ -5,6 +5,7 @@ import { killSwitch } from '../src/brokers/safety/KillSwitch';
 import { FivePaisaLiveAdapter } from '../src/brokers/adapters/fivepaisa/FivePaisaLiveAdapter';
 import { FivePaisaBrokerAdapter } from '../src/brokers/adapters/fivepaisa/FivePaisaBrokerAdapter';
 import { liveTradingGate } from '../src/brokers/safety/LiveTradingGate';
+import { brokerRegistry } from '../src/brokers/registry';
 import { executeRun, executeQuery, executeTransaction, resetDatabaseInstanceForTesting } from '../src/database/db';
 import fs from 'fs';
 import path from 'path';
@@ -145,6 +146,7 @@ async function runFirstLiveCertificationTests() {
     accessToken: 'mock-token'
   };
   (adapter as any).status = 'CONNECTED';
+  brokerRegistry.registerAdapter(adapter);
 
   fetchCallsCount = 0;
   let directBypassCaught = false;
@@ -456,6 +458,8 @@ async function runFirstLiveCertificationTests() {
   fetchCallsCount = 0;
   let test12Caught = false;
   const tokenHash = hashReservationToken(reservation1.reservationToken);
+  const origFingerprintRow = await executeQuery<any>("SELECT fingerprint FROM first_live_ledger WHERE id = ?", [tokenHash]);
+  const originalFingerprint = origFingerprintRow[0]?.fingerprint;
   // Nullify fingerprint inside the database
   await executeRun("UPDATE first_live_ledger SET fingerprint = NULL WHERE id = ?", [tokenHash]);
   try {
@@ -504,8 +508,7 @@ async function runFirstLiveCertificationTests() {
   console.log('  ✓ TEST 13: Malformed Fingerprint blocked cleanly (fail-closed).');
 
   // Restore the correct fingerprint for subsequent tests
-  const correctFingerprint = generateFirstLiveFingerprint(validOrderRequest, 'test-idem-success', 'test-corr-success');
-  await executeRun("UPDATE first_live_ledger SET fingerprint = ? WHERE id = ?", [correctFingerprint, tokenHash]);
+  await executeRun("UPDATE first_live_ledger SET fingerprint = ? WHERE id = ?", [originalFingerprint, tokenHash]);
 
   // ----------------------------------------------------------------
   // G. Reserved order passes adapter interlock

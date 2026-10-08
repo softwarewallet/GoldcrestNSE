@@ -117,9 +117,19 @@ export class BrokerRegistry {
     return this.adapters.has(`${broker}_${environment}`);
   }
 
-  registerAdapter(broker: BrokerType, environment: TradingEnvironment, adapter: BrokerAdapter): void {
+  registerAdapter(brokerOrAdapter: BrokerType | BrokerAdapter, environment?: TradingEnvironment, maybeAdapter?: BrokerAdapter): void {
     this.ensureInitialized();
-    const key = `${broker}_${environment}`;
+    if (typeof brokerOrAdapter === 'object' && brokerOrAdapter !== null) {
+      const adapter = brokerOrAdapter as BrokerAdapter;
+      const broker = (adapter as any).broker || 'FIVE_PAISA';
+      const env = (adapter as any).environment || 'LIVE';
+      this.adapters.set(`${broker}_${env}`, adapter);
+      return;
+    }
+    const broker = brokerOrAdapter as BrokerType;
+    const env = environment || 'LIVE';
+    const adapter = maybeAdapter!;
+    const key = `${broker}_${env}`;
     this.adapters.set(key, adapter);
   }
 
