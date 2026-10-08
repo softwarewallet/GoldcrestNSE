@@ -215,6 +215,20 @@ async function runCertification() {
   console.log(`=== 5PAISA LIVE CONNECTIVITY AUDIT INITIATED ===`);
   console.log(`Run ID: ${logger.getRunId()}`);
   
+  // 1. Execution Environment Details
+  console.log('EXECUTION ENVIRONMENT DETAILS:');
+  console.log(`process.cwd():      ${process.cwd()}`);
+  console.log(`path.resolve("."):  ${path.resolve('.')}`);
+  console.log(`Node version:       ${process.version}`);
+  console.log(`process.env.GOLDCREST_DB_FILE: ${process.env.GOLDCREST_DB_FILE || 'NOT SET'}`);
+  
+  if (process.env.HOSTNAME || process.env.K_REVISION) {
+    console.log('EXECUTION ENVIRONMENT: SANDBOX / CONTAINER (AI Studio Environment)');
+  } else {
+    console.log('EXECUTION ENVIRONMENT: LOCAL PROJECT / UNKNOWN');
+  }
+  console.log('');
+
   process.env.NODE_ENV = 'test';
 
   const results = {
