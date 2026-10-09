@@ -910,24 +910,22 @@ app.get('/api/operations/active-auto-live-monitor', operatorAuthRequired, async 
     const executionGateUnlocked = LIVE_AUTO_EXECUTION_ALLOWED === true;
 
     const monitor = evaluateActiveAutoLiveMonitor({
-      configurationIntegrityOk: configIntegrity.ok,
-      tradingModeLiveOnly: config.tradingMode === 'LIVE_ONLY',
-      databasePersistenceHealthy: !observability.databasePersistence.lastPersistenceError,
-      runtimeLifecycleRunning: observability.lifecycle.state === 'RUNNING',
-      auditLogReady: observability.auditLog.enabled && observability.auditLog.exists,
-      cTraderConnected: connection?.connected === true && account?.connectionStatus === 'CONNECTED',
-      cTraderAccountIsLive: accountIsLive,
-      cTraderAccountIdPresent: accountIdPresent,
-      cTraderCurrencyPresent: currencyPresent,
-      cTraderBalanceValid: balanceValid,
-      cTraderEquityValid: equityValid,
-      cTraderTradingPermission: tradingPermission,
-      cTraderApiModeLive: getCTraderApiMode() === 'LIVE',
-      killSwitchClear: !killSwitch.isHalted(),
-      executionGateUnlocked,
-      autoTradingStateOperational,
-      noUnresolvedExecutionIntents,
-      cTraderAccountStateConsistent: accountConsistency.consistent
+        brokerType: 'FIVE_PAISA',
+        configurationIntegrityOk: configIntegrity.ok,
+        tradingModeLiveOnly: config.tradingMode === 'LIVE_ONLY',
+        databasePersistenceHealthy: !observability.databasePersistence.lastPersistenceError,
+        runtimeLifecycleRunning: observability.lifecycle.state === 'RUNNING',
+        auditLogReady: observability.auditLog.enabled && observability.auditLog.exists,
+        connected: connection?.connected === true && account?.connectionStatus === 'CONNECTED',
+        accountIsLive: accountIsLive,
+        accountIdPresent: accountIdPresent,
+        balanceValid: balanceValid,
+        tradingPermission: tradingPermission,
+        killSwitchClear: !killSwitch.isHalted(),
+        executionGateUnlocked,
+        autoTradingStateOperational,
+        noUnresolvedExecutionIntents,
+        accountStateConsistent: accountConsistency.consistent
     });
 
     liveRuntimeLog(
