@@ -607,13 +607,13 @@ app.get('/api/operations/go-live-validation', operatorAuthRequired, async (_req:
 
       validationInput.fivePaisa = {
         fivePaisaConnected: connection?.connected === true,
-        fivePaisaAccountIsLive: true, 
+        fivePaisaAccountIsLive: account?.accountType === 'LIVE' || account?.isLiveAccount === true,
         fivePaisaAccountIdPresent: Boolean(String(account?.accountId || '').trim()),
         fivePaisaCurrencyPresent: Boolean(String(account?.currency || '').trim()),
         fivePaisaBalanceValid: typeof account?.balance === 'number' && Number.isFinite(account.balance) && account.balance > 0,
         fivePaisaEquityValid: typeof account?.equity === 'number' && Number.isFinite(account.equity) && account.equity > 0,
-        fivePaisaTradingPermission: true,
-        fivePaisaAccountStateConsistent: true
+        fivePaisaTradingPermission: Array.isArray(account?.permissions) && account.permissions.includes('TRADING'),
+        fivePaisaAccountStateConsistent: account?.connectionStatus === 'CONNECTED'
       };
     }
     
@@ -2963,13 +2963,13 @@ async function startServer() {
     // cTrader historical endpoints.
     void databaseInitPromise
       .then(() => {
-        startLiveTradeResearchOutcomeTracker();
-        startCurrentPairPredictionCollectionScheduler();
+        // startLiveTradeResearchOutcomeTracker();
+        // startCurrentPairPredictionCollectionScheduler();
       })
-      .then(() => syncMarketHistory())
-      .then(() => {
-        startMarketHistoryScheduler();
-      })
+      // .then(() => syncMarketHistory())
+      // .then(() => {
+      //   startMarketHistoryScheduler();
+      // })
       .catch((error) => {
         liveRuntimeLog('ERROR', 'MARKET_HISTORY_INITIAL_SYNC_FAILED', {
           error: error?.message || String(error)
@@ -2990,8 +2990,8 @@ async function startServer() {
   runtimeLifecycle.registerCleanup('AUTO_LIVE', () => {
     autoTradingService.stop('Server shutdown requested.');
   });
-  runtimeLifecycle.registerCleanup('CURRENT_PAIR_PREDICTION_COLLECTION', stopCurrentPairPredictionCollectionScheduler);
-  runtimeLifecycle.registerCleanup('LIVE_TRADE_RESEARCH_OUTCOME_TRACKER', stopLiveTradeResearchOutcomeTracker);
+  // runtimeLifecycle.registerCleanup('CURRENT_PAIR_PREDICTION_COLLECTION', stopCurrentPairPredictionCollectionScheduler);
+  // runtimeLifecycle.registerCleanup('LIVE_TRADE_RESEARCH_OUTCOME_TRACKER', stopLiveTradeResearchOutcomeTracker);
   runtimeLifecycle.registerCleanup('ACCOUNT_BALANCE_SNAPSHOT', stopAccountBalanceSnapshotScheduler);
   runtimeLifecycle.registerCleanup('MARKET_HISTORY', stopMarketHistoryScheduler);
   runtimeLifecycle.registerCleanup('EXECUTION_RECONCILIATION_TIMER', () => {
