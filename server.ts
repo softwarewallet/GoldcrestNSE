@@ -913,33 +913,43 @@ app.get('/api/operations/active-auto-live-monitor', operatorAuthRequired, async 
     );
     const executionGateUnlocked = LIVE_AUTO_EXECUTION_ALLOWED === true;
 
-    let monitorInput: any = {
-        brokerType: selectedBroker,
+    const commonInput = {
         configurationIntegrityOk: configIntegrity.ok,
         tradingModeLiveOnly: config.tradingMode === 'LIVE_ONLY',
         databasePersistenceHealthy: !observability.databasePersistence.lastPersistenceError,
         runtimeLifecycleRunning: observability.lifecycle.state === 'RUNNING',
         auditLogReady: observability.auditLog.enabled && observability.auditLog.exists,
-        connected: connection?.connected === true && account?.connectionStatus === 'CONNECTED',
-        accountIsLive: accountIsLive,
-        accountIdPresent: accountIdPresent,
-        balanceValid: balanceValid,
-        tradingPermission: tradingPermission,
         killSwitchClear: !killSwitch.isHalted(),
         executionGateUnlocked,
         autoTradingStateOperational,
-        noUnresolvedExecutionIntents,
-        accountStateConsistent: accountConsistency.consistent
+        noUnresolvedExecutionIntents
     };
 
+    let monitorInput: any;
     if (selectedBroker === 'CTRADER') {
-        const currencyPresent = Boolean(String(account?.currency || '').trim());
-        const equityValid = typeof account?.equity === 'number' && Number.isFinite(account.equity) && account.equity > 0;
         monitorInput = {
-            ...monitorInput,
-            currencyPresent: currencyPresent,
-            equityValid: equityValid,
-            apiModeLive: getCTraderApiMode() === 'LIVE'
+            ...commonInput,
+            brokerType: 'CTRADER',
+            connected: connection?.connected === true && account?.connectionStatus === 'CONNECTED',
+            accountIsLive: accountIsLive,
+            accountIdPresent: accountIdPresent,
+            currencyPresent: Boolean(String(account?.currency || '').trim()),
+            balanceValid: balanceValid,
+            equityValid: typeof account?.equity === 'number' && Number.isFinite(account.equity) && account.equity > 0,
+            tradingPermission: tradingPermission,
+            apiModeLive: getCTraderApiMode() === 'LIVE',
+            accountStateConsistent: accountConsistency.consistent
+        };
+    } else {
+        monitorInput = {
+            ...commonInput,
+            brokerType: 'FIVE_PAISA',
+            connected: connection?.connected === true && account?.connectionStatus === 'CONNECTED',
+            accountIsLive: accountIsLive,
+            accountIdPresent: accountIdPresent,
+            tradingPermission: tradingPermission,
+            balanceValid: balanceValid,
+            accountStateConsistent: accountConsistency.consistent
         };
     }
 
