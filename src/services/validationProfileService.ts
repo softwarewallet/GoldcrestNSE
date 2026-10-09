@@ -1,4 +1,4 @@
-export type ValidationProfile = 'CTRADER' | '5PAISA';
+export type ValidationProfile = 'CTRADER' | '5PAISA' | 'FIVE_PAISA';
 
 export interface CommonValidationInput {
   productionEnvironment: boolean;

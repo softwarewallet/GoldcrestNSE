@@ -2296,7 +2296,7 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
                   onClick={runAutoLiveMonitor}
                   disabled={autoLiveMonitorBusy}
                   className="px-2.5 py-1 rounded border border-violet-700 bg-violet-950/70 text-violet-300 hover:bg-violet-900/80 text-[10px] font-bold disabled:opacity-50"
-                  title="Check the current active monitor status"
+                  title="Telemetry health check only. No order authorization or submission is performed."
                 >
                   {autoLiveMonitorBusy ? 'CHECKING...' : 'REFRESH MONITOR'}
                 </button>
@@ -2320,21 +2320,41 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
                       {autoLiveMonitor.status || 'UNKNOWN'}
                     </strong>
                   </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Broker Order Submitted</span>
+                    <strong className="text-emerald-400">NO</strong>
+                  </div>
+                  {autoLiveMonitor.checks && (
+                    <div className="flex items-center justify-between text-[10px] text-slate-400">
+                      <span>Evaluated Checks</span>
+                      <span>{Object.keys(autoLiveMonitor.checks).length} gates</span>
+                    </div>
+                  )}
                   {autoLiveMonitor.brokerType === 'CTRADER' && autoLiveMonitor.cTrader && (
-                    <div className="text-[10px] text-slate-500">
-                      Connected: {autoLiveMonitor.cTrader.connected ? 'YES' : 'NO'}
+                    <div className="text-[10px] text-slate-400 space-y-0.5">
+                      <div>Connection: <span className={autoLiveMonitor.cTrader.connected ? 'text-emerald-400' : 'text-rose-400'}>{autoLiveMonitor.cTrader.connected ? 'CONNECTED' : 'DISCONNECTED'}</span></div>
+                      {autoLiveMonitor.cTrader.accountId && <div>Account ID: {autoLiveMonitor.cTrader.accountId}</div>}
                     </div>
                   )}
                   {autoLiveMonitor.brokerType === 'FIVE_PAISA' && autoLiveMonitor.fivePaisa && (
-                    <div className="text-[10px] text-slate-500">
-                      Connected: {autoLiveMonitor.fivePaisa.connected ? 'YES' : 'NO'}
+                    <div className="text-[10px] text-slate-400 space-y-0.5">
+                      <div>Connection: <span className={autoLiveMonitor.fivePaisa.connected ? 'text-emerald-400' : 'text-rose-400'}>{autoLiveMonitor.fivePaisa.connected ? 'CONNECTED' : 'DISCONNECTED'}</span></div>
+                      {autoLiveMonitor.fivePaisa.accountId && <div>Account ID: {autoLiveMonitor.fivePaisa.accountId}</div>}
+                    </div>
+                  )}
+                  {Array.isArray(autoLiveMonitor.criticalFailures) && autoLiveMonitor.criticalFailures.length > 0 && (
+                    <div className="text-[10px] text-rose-400 font-semibold">
+                      Critical Blockers: {autoLiveMonitor.criticalFailures.join(', ')}
                     </div>
                   )}
                   {Array.isArray(autoLiveMonitor.failures) && autoLiveMonitor.failures.length > 0 && (
                     <div className="text-[10px] text-rose-300">
-                      Issues: {autoLiveMonitor.failures.join(', ')}
+                      All Issues: {autoLiveMonitor.failures.join(', ')}
                     </div>
                   )}
+                  <div className="text-[9px] text-slate-500 italic border-t border-slate-800/80 pt-1">
+                    Passive telemetry only. A healthy monitor does not authorize execution or submit broker orders.
+                  </div>
                 </div>
               )}
 

@@ -61,7 +61,7 @@ export function evaluateProductionGoLiveValidation(
     checks.cTraderTradingPermission = gate(input.ctradr.cTraderTradingPermission, 'cTrader LIVE trading permission is available.', 'cTrader LIVE trading permission is unavailable.');
     checks.cTraderApiMode = gate(input.ctradr.cTraderApiMode === 'LIVE', 'cTrader API mode is LIVE.', 'cTrader API mode must be LIVE for production autonomous execution.');
     checks.cTraderAccountStateConsistent = gate(input.ctradr.cTraderAccountStateConsistent, 'cTrader LIVE account state is aligned with persisted LIVE history.', 'cTrader LIVE account state is not aligned with persisted LIVE history.');
-  } else if (input.profile === '5PAISA' && input.fivePaisa) {
+  } else if ((input.profile === '5PAISA' || input.profile === 'FIVE_PAISA') && input.fivePaisa) {
     checks.fivePaisaConnected = gate(input.fivePaisa.fivePaisaConnected, '5paisa LIVE account is connected.', '5paisa LIVE account is not connected.');
     checks.fivePaisaAccountLive = gate(input.fivePaisa.fivePaisaAccountIsLive, '5paisa account is identified as LIVE.', '5paisa account is not identified as LIVE.');
     checks.fivePaisaAccountId = gate(input.fivePaisa.fivePaisaAccountIdPresent, '5paisa LIVE account identity is available.', '5paisa LIVE account identity is unavailable.');
