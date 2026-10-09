@@ -248,6 +248,10 @@ class AutoTradingService {
       && process.env.GOLDCREST_AUTONOMOUS_LIVE_EXECUTION === 'true';
   }
 
+  setStateForTesting(state: AutoTradingState): void {
+    this.state = state;
+  }
+
 
   private async withExecutionLock<T>(worker: () => Promise<T>): Promise<T> {
     const previous = this.executionQueue;

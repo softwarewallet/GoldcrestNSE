@@ -47,8 +47,8 @@ export class BrokerRegistry {
   }
 
   setSelectedBroker(broker: BrokerType): void {
-    if (broker !== 'FIVE_PAISA') {
-      throw new Error('Invalid broker. Goldcrest operates exclusively with FIVE_PAISA for Indian market.');
+    if (broker !== 'FIVE_PAISA' && broker !== 'CTRADER') {
+      throw new Error(`Invalid broker ${broker}. Goldcrest supports FIVE_PAISA and CTRADER.`);
     }
     this.selectedBroker = broker;
   }
@@ -163,16 +163,26 @@ export class BrokerRegistry {
 
   getCredentialStatuses(): BrokerCredentialStatus[] {
     this.ensureInitialized();
-    const fivePaisaLive = this.adapters.get('FIVE_PAISA_LIVE') as FivePaisaLiveAdapter;
-    const fpLiveStatus = fivePaisaLive.getConfigStatus();
+    const fivePaisaLive = this.adapters.get('FIVE_PAISA_LIVE') as any;
+    const fpLiveStatus = typeof fivePaisaLive?.getConfigStatus === 'function'
+      ? fivePaisaLive.getConfigStatus()
+      : {
+          configured: false,
+          hasAccessToken: false,
+          hasTotpSecret: false,
+          maskedClientId: undefined,
+          maskedAccessToken: undefined,
+          maskedTotpSecret: undefined,
+          maskedPin: undefined
+        };
 
     return [
       {
         broker: 'FIVE_PAISA',
         environment: 'LIVE',
-        configured: fpLiveStatus.configured,
-        hasAccessToken: fpLiveStatus.hasAccessToken,
-        hasTotpSecret: fpLiveStatus.hasTotpSecret,
+        configured: Boolean(fpLiveStatus.configured),
+        hasAccessToken: Boolean(fpLiveStatus.hasAccessToken),
+        hasTotpSecret: Boolean(fpLiveStatus.hasTotpSecret),
         maskedClientId: fpLiveStatus.maskedClientId,
         maskedAccessToken: fpLiveStatus.maskedAccessToken,
         maskedTotpSecret: fpLiveStatus.maskedTotpSecret,

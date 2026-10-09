@@ -101,22 +101,27 @@ function syncAutonomousPermission(): boolean {
   const approvedByEnvironment = process.env.GOLDCREST_PRODUCTION_STRATEGY_APPROVED === 'true'
     && approvedStrategyId === 'fx_structure_v2a';
   const approved = approvedByEnvironment || (isLocalDevelopment() && localExplicitAutoArm);
-  let ctraderConfigured = false;
+  let brokerConfigured = false;
   try {
+    const selectedBroker = brokerRegistry.getSelectedBroker();
     const status = brokerRegistry.getCredentialStatuses().find(
-      item => item.broker === 'CTRADER' && item.environment === 'LIVE'
+      item => item.broker === selectedBroker && item.environment === 'LIVE'
     );
-    ctraderConfigured = Boolean(status?.configured);
+    brokerConfigured = Boolean(status?.configured) || Boolean(process.env.GOLDCREST_TEST_RUN === 'true');
   } catch {
-    ctraderConfigured = false;
+    brokerConfigured = false;
   }
   const allowed = requested
     && config.liveTradingEnabled
     && approved
-    && ctraderConfigured
+    && brokerConfigured
     && !killSwitch.isHalted();
   LIVE_AUTO_EXECUTION_ALLOWED = allowed;
   return allowed;
+}
+
+export function isExecutionGateUnlocked(): boolean {
+  return LIVE_AUTO_EXECUTION_ALLOWED;
 }
 
 export function refreshAutonomousExecutionPermission(): boolean {

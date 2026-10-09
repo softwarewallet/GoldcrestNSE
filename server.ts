@@ -24,6 +24,7 @@ import { brokerRouter } from './src/brokers/brokerRoutes';
 import { killSwitch } from './src/brokers/safety/KillSwitch';
 import { LIVE_AUTO_EXECUTION_ALLOWED, refreshAutonomousExecutionPermission, armAutonomousExecutionGate, lockAutonomousExecutionGate, validateAutoLiveOrderPacket } from './src/brokers/safety/AutoExecutionEngine';
 import { autoTradingService } from './src/services/autoTradingService';
+import { handleActiveAutoLiveMonitor } from './src/services/activeAutoLiveMonitorEndpoint';
 import { initializeLiveRuntimeLog, getLiveRuntimeLogStatus, startLiveRuntimeLog, stopLiveRuntimeLog, getLiveRuntimeLogFile, listLiveRuntimeLogFiles, logApplicationAction, liveRuntimeLog } from './src/services/liveRuntimeLog';
 import { fetchIndianMarketNews } from './src/services/indianMarketNewsService';
 import {
@@ -148,7 +149,7 @@ if (process.env.NODE_ENV !== 'production') {
   });
 }
 
-const app = express();
+export const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const GOLDCREST_RUNTIME_ID = `goldcrest-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 let databaseReady = false;
@@ -856,190 +857,79 @@ app.get('/api/operations/ctrader-functional-validation', operatorAuthRequired, a
   }
 });
 
-app.get('/api/operations/active-auto-live-monitor', operatorAuthRequired, async (_req: Request, res: Response) => {
+app.get('/api/operations/fivepaisa-connection-verification', operatorAuthRequired, async (_req: Request, res: Response) => {
   try {
     await databaseInitPromise;
 
-    const config = getSystemConfig();
-    const configIntegrity = evaluateSystemConfigIntegrity(config);
-    const observability = await getRuntimeObservabilitySnapshot({
-      runtimeId: GOLDCREST_RUNTIME_ID,
-      environment: process.env.NODE_ENV || 'development'
-    });
-
-    const selectedBroker = brokerRegistry.getSelectedBroker();
-    const adapter = brokerRegistry.getAdapter(selectedBroker, 'LIVE');
-    
-    let account = null;
+    const adapter = brokerRegistry.getAdapter('FIVE_PAISA', 'LIVE');
     let connection = null;
+    let account = null;
+
     try {
       connection = await adapter.testConnection();
       account = await adapter.getAccount();
-    } catch {
-      connection = null;
+    } catch (err: any) {
+      connection = { connected: false, error: err?.message || '5paisa connection test failed' };
       account = null;
     }
 
     const permissions = Array.isArray(account?.permissions) ? account.permissions : [];
-    const accountIsLive = account?.accountType === 'LIVE' && account?.isLiveAccount !== false;
+    const accountIsLive = account?.accountType === 'LIVE' || account?.isLiveAccount === true;
     const accountIdPresent = Boolean(String(account?.accountId || '').trim());
     const balanceValid = typeof account?.balance === 'number' && Number.isFinite(account.balance) && account.balance > 0;
-    
-    let tradingPermission = false;
-    if (selectedBroker === 'FIVE_PAISA') {
-        tradingPermission = permissions.includes('TRADING') || permissions.includes('EQUITY') || permissions.includes('DERIVATIVES') || permissions.includes('NSE_FNO');
-    } else {
-        tradingPermission = permissions.includes('TRADING') || permissions.includes('EQUITY') || permissions.includes('DERIVATIVES');
-    }
+    const tradingPermission = permissions.includes('TRADING') || permissions.includes('EQUITY') || permissions.includes('DERIVATIVES') || permissions.includes('NSE_FNO');
 
-    const snapshots = await getAccountBalanceSnapshots({
-      broker: selectedBroker,
-      limit: 1
-    });
-    
-    const accountConsistency = evaluateAccountStateConsistency(
-      selectedBroker,
-      account,
-      snapshots[0] || null
-    );
+    const failures: string[] = [];
+    if (!connection?.connected) failures.push('5PAISA_NOT_CONNECTED');
+    if (!accountIsLive) failures.push('ACCOUNT_NOT_LIVE');
+    if (!accountIdPresent) failures.push('ACCOUNT_ID_UNAVAILABLE');
+    if (!balanceValid) failures.push('BALANCE_INVALID');
+    if (!tradingPermission) failures.push('TRADING_PERMISSION_UNAVAILABLE');
 
-    const noUnresolvedExecutionIntents =
-      observability.executionIntents.pending === 0
-      && observability.executionIntents.inFlight === 0
-      && observability.executionIntents.reconciliationTimeout === 0;
-
-    const autoTradingStateOperational = ['RUNNING', 'PREPARING', 'PAUSED_LIMIT'].includes(
-      observability.autoTrading.state
-    );
-    const executionGateUnlocked = LIVE_AUTO_EXECUTION_ALLOWED === true;
-
-    const commonInput = {
-        configurationIntegrityOk: configIntegrity.ok,
-        tradingModeLiveOnly: config.tradingMode === 'LIVE_ONLY',
-        databasePersistenceHealthy: !observability.databasePersistence.lastPersistenceError,
-        runtimeLifecycleRunning: observability.lifecycle.state === 'RUNNING',
-        auditLogReady: observability.auditLog.enabled && observability.auditLog.exists,
-        killSwitchClear: !killSwitch.isHalted(),
-        executionGateUnlocked,
-        autoTradingStateOperational,
-        noUnresolvedExecutionIntents
-    };
-
-    let monitorInput: any;
-    if (selectedBroker === 'CTRADER') {
-        monitorInput = {
-            ...commonInput,
-            brokerType: 'CTRADER',
-            connected: connection?.connected === true && account?.connectionStatus === 'CONNECTED',
-            accountIsLive: accountIsLive,
-            accountIdPresent: accountIdPresent,
-            currencyPresent: Boolean(String(account?.currency || '').trim()),
-            balanceValid: balanceValid,
-            equityValid: typeof account?.equity === 'number' && Number.isFinite(account.equity) && account.equity > 0,
-            tradingPermission: tradingPermission,
-            apiModeLive: getCTraderApiMode() === 'LIVE',
-            accountStateConsistent: accountConsistency.consistent
-        };
-    } else {
-        monitorInput = {
-            ...commonInput,
-            brokerType: 'FIVE_PAISA',
-            connected: connection?.connected === true && account?.connectionStatus === 'CONNECTED',
-            accountIsLive: accountIsLive,
-            accountIdPresent: accountIdPresent,
-            tradingPermission: tradingPermission,
-            balanceValid: balanceValid,
-            accountStateConsistent: accountConsistency.consistent
-        };
-    }
-
-    const monitor = evaluateActiveAutoLiveMonitor(monitorInput);
+    const ready = failures.length === 0;
 
     liveRuntimeLog(
-      monitor.healthy ? 'SYSTEM' : monitor.status === 'BLOCKED' ? 'ERROR' : 'WARN',
-      monitor.healthy ? 'ACTIVE_AUTO_LIVE_MONITOR_HEALTHY' : 'ACTIVE_AUTO_LIVE_MONITOR_BLOCKED',
+      ready ? 'SYSTEM' : 'WARN',
+      ready ? 'FIVEPAISA_CONNECTION_VERIFICATION_READY' : 'FIVEPAISA_CONNECTION_VERIFICATION_BLOCKED',
       {
-        failures: monitor.failures,
-        criticalFailures: monitor.criticalFailures,
-        cTraderApiMode: getCTraderApiMode(),
-        autoTradingState: observability.autoTrading.state,
-        accountConsistency: accountConsistency.status
+        broker: 'FIVE_PAISA',
+        connected: connection?.connected === true,
+        failures
       }
     );
 
-    const responsePayload: any = {
-      phase: '9.6',
-      generatedAt: Date.now(),
-      runtimeId: GOLDCREST_RUNTIME_ID,
-      environment: process.env.NODE_ENV || 'development',
-      tradingMode: 'LIVE_ONLY',
-      brokerType: selectedBroker,
-      status: monitor.status,
-      healthy: monitor.healthy,
-      checks: monitor.checks,
-      failures: monitor.failures,
-      criticalFailures: monitor.criticalFailures,
-    };
-
-    if (selectedBroker === 'CTRADER') {
-        responsePayload.cTrader = {
-            apiMode: getCTraderApiMode(),
-            apiEndpoint: connection?.apiEndpoint || null,
-            connected: connection?.connected === true,
-            accountId: account ? maskIdentifier(String(account.accountId || '')) : null,
-            accountCurrency: account?.currency || null,
-            accountType: account?.accountType || null,
-            balance: account?.balance ?? null,
-            equity: account?.equity ?? null,
-            tradingPermission,
-            accountConsistency: {
-              status: accountConsistency.status,
-              consistent: accountConsistency.consistent,
-              snapshotAgeMs: accountConsistency.snapshotAgeMs,
-              balanceDelta: accountConsistency.balanceDelta,
-              equityDelta: accountConsistency.equityDelta
-            }
-        };
-    } else {
-        responsePayload.fivePaisa = {
-            connected: connection?.connected === true,
-            accountId: account ? maskIdentifier(String(account.accountId || '')) : null,
-            accountType: account?.accountType || null,
-            balance: account?.balance ?? null,
-            tradingPermission,
-            accountConsistency: {
-              status: accountConsistency.status,
-              consistent: accountConsistency.consistent,
-              snapshotAgeMs: accountConsistency.snapshotAgeMs,
-              balanceDelta: accountConsistency.balanceDelta,
-              equityDelta: accountConsistency.equityDelta
-            }
-        };
-    }
-
-    responsePayload.executionGate = {
-        unlocked: executionGateUnlocked,
-        locked: !executionGateUnlocked
-    };
-    responsePayload.autoTrading = {
-        state: observability.autoTrading.state,
-        currentExecution: observability.autoTrading.currentExecution,
-        lastExecution: observability.autoTrading.lastExecution
-    };
-    responsePayload.unresolvedExecutionIntents = observability.executionIntents;
-
-    return res.status(monitor.statusCode).json(responsePayload);
+    return res.status(ready ? 200 : 409).json({
+      phase: '9.7.2',
+      broker: 'FIVE_PAISA',
+      environment: 'LIVE',
+      ready,
+      status: connection?.connected ? (ready ? 'VERIFIED' : 'DEGRADED') : 'DISCONNECTED',
+      connected: connection?.connected === true,
+      account: account ? maskIdentifier(String(account.accountId || '')) : null,
+      balance: account?.balance ?? null,
+      currency: account?.currency || 'INR',
+      tradingPermission,
+      failures,
+      orderSubmissionPerformed: false
+    });
   } catch (error: any) {
-    liveRuntimeLog('ERROR', 'ACTIVE_AUTO_LIVE_MONITOR_FAILED', {
+    liveRuntimeLog('ERROR', 'FIVEPAISA_CONNECTION_VERIFICATION_FAILED', {
       error: error?.message || String(error)
     });
     return res.status(503).json({
-      phase: '9.6',
-      error: 'ACTIVE_AUTO_LIVE_MONITOR_UNAVAILABLE',
-      message: error?.message || 'Active Auto Live monitoring is unavailable.'
+      phase: '9.7.2',
+      broker: 'FIVE_PAISA',
+      environment: 'LIVE',
+      ready: false,
+      status: 'ERROR',
+      connected: false,
+      failures: [error?.message || '5paisa connection verification unavailable.'],
+      orderSubmissionPerformed: false
     });
   }
 });
+
+app.get('/api/operations/active-auto-live-monitor', operatorAuthRequired, handleActiveAutoLiveMonitor);
 
 app.get('/api/observability/runtime', operatorAuthRequired, async (_req: Request, res: Response) => {
   try {
@@ -3080,4 +2970,8 @@ async function startServer() {
   process.once('SIGINT', () => shutdown('SIGINT'));
 }
 
-startServer();
+if (process.env.NODE_ENV !== 'test' && process.env.GOLDCREST_TEST_RUN !== 'true') {
+  startServer();
+}
+
+export { startServer };

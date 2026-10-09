@@ -9,6 +9,7 @@ export interface ProductionGoLiveValidationInput {
   profile: ValidationProfile;
   common: CommonValidationInput;
   ctradr?: CTraderValidationInput;
+  cTrader?: CTraderValidationInput;
   fivePaisa?: FivePaisaValidationInput;
 }
 
@@ -49,18 +50,19 @@ export function evaluateProductionGoLiveValidation(
     orderSubmission: gate(!input.common.validationSubmittedOrder, 'Validation performed without submitting a broker order.', 'Validation must never submit a broker order.')
   };
 
-  if (input.profile === 'CTRADER' && input.ctradr) {
-    checks.cTraderCredentials = gate(input.ctradr.cTraderCredentialsConfigured, 'cTrader LIVE credentials are configured.', 'cTrader LIVE credentials are not configured.');
-    checks.cTraderBrokerVerification = gate(input.ctradr.cTraderBrokerVerified, 'cTrader LIVE broker verification passed.', 'cTrader LIVE broker verification did not pass.');
-    checks.cTraderConnected = gate(input.ctradr.cTraderConnected, 'cTrader LIVE account is connected.', 'cTrader LIVE account is not connected.');
-    checks.cTraderAccountLive = gate(input.ctradr.cTraderAccountIsLive, 'cTrader account is identified as LIVE.', 'cTrader account is not identified as LIVE.');
-    checks.cTraderAccountId = gate(input.ctradr.cTraderAccountIdPresent, 'cTrader LIVE account identity is available.', 'cTrader LIVE account identity is unavailable.');
-    checks.cTraderCurrency = gate(input.ctradr.cTraderCurrencyPresent, 'cTrader LIVE account currency is available.', 'cTrader LIVE account currency is unavailable.');
-    checks.cTraderBalance = gate(input.ctradr.cTraderBalanceValid, 'cTrader LIVE balance is valid and positive.', 'cTrader LIVE balance is invalid or non-positive.');
-    checks.cTraderEquity = gate(input.ctradr.cTraderEquityValid, 'cTrader LIVE equity is valid and positive.', 'cTrader LIVE equity is invalid or non-positive.');
-    checks.cTraderTradingPermission = gate(input.ctradr.cTraderTradingPermission, 'cTrader LIVE trading permission is available.', 'cTrader LIVE trading permission is unavailable.');
-    checks.cTraderApiMode = gate(input.ctradr.cTraderApiMode === 'LIVE', 'cTrader API mode is LIVE.', 'cTrader API mode must be LIVE for production autonomous execution.');
-    checks.cTraderAccountStateConsistent = gate(input.ctradr.cTraderAccountStateConsistent, 'cTrader LIVE account state is aligned with persisted LIVE history.', 'cTrader LIVE account state is not aligned with persisted LIVE history.');
+  const cTraderInput = input.cTrader || input.ctradr;
+  if (input.profile === 'CTRADER' && cTraderInput) {
+    checks.cTraderCredentials = gate(cTraderInput.cTraderCredentialsConfigured, 'cTrader LIVE credentials are configured.', 'cTrader LIVE credentials are not configured.');
+    checks.cTraderBrokerVerification = gate(cTraderInput.cTraderBrokerVerified, 'cTrader LIVE broker verification passed.', 'cTrader LIVE broker verification did not pass.');
+    checks.cTraderConnected = gate(cTraderInput.cTraderConnected, 'cTrader LIVE account is connected.', 'cTrader LIVE account is not connected.');
+    checks.cTraderAccountLive = gate(cTraderInput.cTraderAccountIsLive, 'cTrader account is identified as LIVE.', 'cTrader account is not identified as LIVE.');
+    checks.cTraderAccountId = gate(cTraderInput.cTraderAccountIdPresent, 'cTrader LIVE account identity is available.', 'cTrader LIVE account identity is unavailable.');
+    checks.cTraderCurrency = gate(cTraderInput.cTraderCurrencyPresent, 'cTrader LIVE account currency is available.', 'cTrader LIVE account currency is unavailable.');
+    checks.cTraderBalance = gate(cTraderInput.cTraderBalanceValid, 'cTrader LIVE balance is valid and positive.', 'cTrader LIVE balance is invalid or non-positive.');
+    checks.cTraderEquity = gate(cTraderInput.cTraderEquityValid, 'cTrader LIVE equity is valid and positive.', 'cTrader LIVE equity is invalid or non-positive.');
+    checks.cTraderTradingPermission = gate(cTraderInput.cTraderTradingPermission, 'cTrader LIVE trading permission is available.', 'cTrader LIVE trading permission is unavailable.');
+    checks.cTraderApiMode = gate(cTraderInput.cTraderApiMode === 'LIVE', 'cTrader API mode is LIVE.', 'cTrader API mode must be LIVE for production autonomous execution.');
+    checks.cTraderAccountStateConsistent = gate(cTraderInput.cTraderAccountStateConsistent, 'cTrader LIVE account state is aligned with persisted LIVE history.', 'cTrader LIVE account state is not aligned with persisted LIVE history.');
   } else if ((input.profile === '5PAISA' || input.profile === 'FIVE_PAISA') && input.fivePaisa) {
     checks.fivePaisaConnected = gate(input.fivePaisa.fivePaisaConnected, '5paisa LIVE account is connected.', '5paisa LIVE account is not connected.');
     checks.fivePaisaAccountLive = gate(input.fivePaisa.fivePaisaAccountIsLive, '5paisa account is identified as LIVE.', '5paisa account is not identified as LIVE.');

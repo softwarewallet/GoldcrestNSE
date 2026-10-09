@@ -388,6 +388,29 @@ brokerRouter.post('/test-connection', async (req: Request, res: Response) => {
   res.json({ routingMode: 'AUTOMATIC_BY_MARKET', results });
 });
 
+brokerRouter.get('/test', async (req: Request, res: Response) => {
+  const requestedBroker = (req.query.broker as BrokerType) || 'FIVE_PAISA';
+  try {
+    const result = await brokerRegistry.testBrokerConnection(requestedBroker, 'LIVE');
+    res.json({
+      broker: requestedBroker,
+      environment: 'LIVE',
+      connected: result.connected,
+      account: result.account ? maskIdentifier(result.account) : '****',
+      error: result.error
+    });
+  } catch (err: any) {
+    const normalized = normalizeBrokerError(err, requestedBroker, 'LIVE');
+    res.json({
+      broker: requestedBroker,
+      environment: 'LIVE',
+      connected: false,
+      account: '****',
+      error: normalized.message
+    });
+  }
+});
+
 // Account discovery is broker-explicit for administrative diagnostics.
 // Normal trading/dashboard flows use /status and aggregate 5paisa.
 brokerRouter.get('/accounts', async (req: Request, res: Response) => {

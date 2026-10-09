@@ -232,8 +232,8 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
   const [autoLiveMonitorBusy, setAutoLiveMonitorBusy] = useState<boolean>(false);
   const [brokerSession, setBrokerSession] = useState<{ status: 'VERIFIED_ACTIVE' | 'VERIFIED_INACTIVE' | 'UNKNOWN' }>({ status: 'UNKNOWN' });
   const [brokerSessionBusy, setBrokerSessionBusy] = useState<boolean>(false);
-  const [ctraderFunctionalValidationBusy, setCtraderFunctionalValidationBusy] = useState<boolean>(false);
-  const [ctraderFunctionalValidation, setCtraderFunctionalValidation] = useState<any | null>(null);
+  const [fivePaisaVerificationBusy, setFivePaisaVerificationBusy] = useState<boolean>(false);
+  const [fivePaisaVerification, setFivePaisaVerification] = useState<any | null>(null);
 
   // Live broker/account/market state only; empty until authoritative APIs return data.
   const [accounts, setAccounts] = useState<AccountCardData[]>([]);
@@ -734,30 +734,49 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
     }
   }, []);
 
-  const runCTraderFunctionalValidation = useCallback(async () => {
-    setCtraderFunctionalValidationBusy(true);
+  const runFivePaisaConnectionVerification = useCallback(async () => {
+    setFivePaisaVerificationBusy(true);
     try {
-      const res = await fetch('/api/brokers/test?broker=FIVE_PAISA&environment=LIVE', {
+      const res = await fetch('/api/operations/fivepaisa-connection-verification', {
         cache: 'no-store',
         headers: { Accept: 'application/json' }
       });
       const data = await res.json().catch(() => ({}));
-      setCtraderFunctionalValidation({
-        ready: data.connected,
+      
+      // Verify the broker returned by the backend is FIVE_PAISA
+      if (data.broker && data.broker !== 'FIVE_PAISA') {
+        throw new Error(`Unexpected broker response: ${data.broker}. Expected FIVE_PAISA.`);
+      }
+
+      setFivePaisaVerification({
+        ready: data.ready === true,
         mode: 'LIVE',
-        status: data.connected ? 'CONNECTED' : 'DISCONNECTED',
-        failures: data.connected ? [] : [data.error || 'Connection failed']
+        broker: data.broker || 'FIVE_PAISA',
+        status: data.status || (data.connected ? 'CONNECTED' : 'DISCONNECTED'),
+        failures: Array.isArray(data.failures) ? data.failures : (data.connected ? [] : ['5paisa connection verification unavailable']),
+        account: data.account,
+        orderSubmissionPerformed: false
       });
+
       if (res.ok && data.connected) {
         setGateFeedback('5paisa LIVE API connection verified. Account: ' + (data.account || '****') + ' (INR).');
       } else {
-        setGateFeedback('5paisa connection test: ' + (data.error || 'Connection unavailable.'));
+        const failureList = Array.isArray(data.failures) && data.failures.length > 0 ? data.failures.join(', ') : (data.error || 'Connection unavailable.');
+        setGateFeedback('5paisa verification: ' + failureList);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.warn('5paisa connection verification failed:', err);
+      setFivePaisaVerification({
+        ready: false,
+        mode: 'LIVE',
+        broker: 'FIVE_PAISA',
+        status: 'DISCONNECTED',
+        failures: [err?.message || '5paisa connection verification failed.'],
+        orderSubmissionPerformed: false
+      });
       setGateFeedback('5paisa connection verification failed.');
     } finally {
-      setCtraderFunctionalValidationBusy(false);
+      setFivePaisaVerificationBusy(false);
     }
   }, []);
 
@@ -2260,30 +2279,40 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
                 <span className="text-slate-400">5paisa Connection Verification:</span>
                 <button
                   type="button"
-                  onClick={runCTraderFunctionalValidation}
-                  disabled={ctraderFunctionalValidationBusy}
+                  onClick={runFivePaisaConnectionVerification}
+                  disabled={fivePaisaVerificationBusy}
                   className="px-2.5 py-1 rounded border border-fuchsia-700 bg-fuchsia-950/70 text-fuchsia-300 hover:bg-fuchsia-900/80 text-[10px] font-bold disabled:opacity-50"
                   title="Validate 5paisa LIVE API connection, account status, and balance. No broker order is submitted."
                 >
-                  {ctraderFunctionalValidationBusy ? 'TESTING...' : 'VERIFY 5PAISA'}
+                  {fivePaisaVerificationBusy ? 'TESTING...' : 'VERIFY 5PAISA'}
                 </button>
               </div>
 
-              {ctraderFunctionalValidation && (
+              {fivePaisaVerification && (
                 <div className="bg-slate-900/70 p-2.5 rounded border border-slate-800 space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-slate-400">5paisa Test Status</span>
-                    <strong className={ctraderFunctionalValidation.ready ? 'text-emerald-400' : 'text-rose-400'}>
-                      {(ctraderFunctionalValidation.mode || 'LIVE') + ' / ' + (ctraderFunctionalValidation.status || 'UNKNOWN')}
+                    <strong className={fivePaisaVerification.ready ? 'text-emerald-400' : 'text-rose-400'}>
+                      {(fivePaisaVerification.mode || 'LIVE') + ' / ' + (fivePaisaVerification.status || 'UNKNOWN')}
                     </strong>
                   </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Broker</span>
+                    <strong className="text-slate-200">5PAISA (NSE/BSE)</strong>
+                  </div>
+                  {fivePaisaVerification.account && (
+                    <div className="flex items-center justify-between text-[10px] text-slate-400">
+                      <span>Account ID</span>
+                      <span>{fivePaisaVerification.account}</span>
+                    </div>
+                  )}
                   <div className="flex items-center justify-between">
                     <span className="text-slate-400">Broker Order Submitted</span>
                     <strong className="text-emerald-400">NO</strong>
                   </div>
-                  {Array.isArray(ctraderFunctionalValidation.failures) && ctraderFunctionalValidation.failures.length > 0 && (
+                  {Array.isArray(fivePaisaVerification.failures) && fivePaisaVerification.failures.length > 0 && (
                     <div className="text-[10px] text-rose-300">
-                      Blockers: {ctraderFunctionalValidation.failures.join(', ')}
+                      Blockers: {fivePaisaVerification.failures.join(', ')}
                     </div>
                   )}
                 </div>
