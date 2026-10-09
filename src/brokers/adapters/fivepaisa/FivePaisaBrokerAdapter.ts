@@ -79,6 +79,7 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
   protected openOrders: Map<string, NormalizedOrder> = new Map();
 
   private static rateLimitedUntil: number = 0;
+  private static lastAutoTotpAttemptAt: number = 0;
   private static rateLimitState: {
     code: 'RATE_LIMITED';
     timestamp: number;
@@ -220,17 +221,39 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
     this.logAction('DISCONNECT', 'SUCCESS', this.config.clientCode || this.config.userId || '');
   }
 
+  public static clearRateLimit(): void {
+    FivePaisaBrokerAdapter.rateLimitedUntil = 0;
+    FivePaisaBrokerAdapter.rateLimitState = null;
+  }
+
   /**
    * Authenticates with 5paisa using TOTP (Time-based One-Time Password) and 2FA PIN
    * Follows official 5paisa OAuth flow: TOTPLogin -> GetAccessToken
    */
   async loginWithTotp(totpCode?: string, pinCode?: string): Promise<string> {
-    const now = Date.now();
-    if (FivePaisaBrokerAdapter.isRateLimited()) {
-      const state = FivePaisaBrokerAdapter.getRateLimitState();
-      const remainingSec = state?.remainingSeconds || 60;
-      this.status = 'RATE_LIMITED';
-      throw new Error(`RATE_LIMITED: 5paisa authentication is temporarily rate-limited. Cooldown active for another ${remainingSec}s. Please wait before attempting authentication again.`);
+    const isExplicitUserSubmission = Boolean(totpCode && totpCode.trim() !== '');
+
+    if (isExplicitUserSubmission) {
+      // Manual user TOTP submission from UI modal overrides local stale cooldowns
+      FivePaisaBrokerAdapter.clearRateLimit();
+    } else {
+      // Background / automatic login attempt
+      if (!this.config.totpSecret) {
+        throw new Error('Automated background login failed: No TOTP Secret is configured. Please enter TOTP in the UI modal.');
+      }
+      const now = Date.now();
+      // Strict 60-second cooldown on automated background TOTP login attempts
+      if (now - FivePaisaBrokerAdapter.lastAutoTotpAttemptAt < 60_000) {
+        throw new Error('Automated background login throttled: Waiting for cooldown to avoid rate-limiting.');
+      }
+      FivePaisaBrokerAdapter.lastAutoTotpAttemptAt = now;
+
+      if (FivePaisaBrokerAdapter.isRateLimited()) {
+        const state = FivePaisaBrokerAdapter.getRateLimitState();
+        const remainingSec = state?.remainingSeconds || 60;
+        this.status = 'RATE_LIMITED';
+        throw new Error(`RATE_LIMITED: 5paisa authentication is temporarily rate-limited. Cooldown active for another ${remainingSec}s. Please wait before attempting authentication again.`);
+      }
     }
 
     if (FivePaisaBrokerAdapter.inFlightTotpPromise) {
@@ -2131,7 +2154,7 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
       return false;
     }
 
-    if (totpCode || this.config.totpSecret) {
+    if (totpCode) {
       try {
         await this.loginWithTotp(totpCode, pinCode);
         return Boolean(this.config.accessToken && this.config.accessToken.trim() !== '');

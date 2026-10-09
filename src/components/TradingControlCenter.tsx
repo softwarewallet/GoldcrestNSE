@@ -228,8 +228,8 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
   const [gateFeedback, setGateFeedback] = useState<string | null>(null);
   const [goLiveValidationBusy, setGoLiveValidationBusy] = useState<boolean>(false);
   const [goLiveValidation, setGoLiveValidation] = useState<any | null>(null);
-  const [activeAutoLiveMonitorBusy, setActiveAutoLiveMonitorBusy] = useState<boolean>(false);
-  const [activeAutoLiveMonitor, setActiveAutoLiveMonitor] = useState<any | null>(null);
+  const [brokerSession, setBrokerSession] = useState<{ status: 'VERIFIED_ACTIVE' | 'VERIFIED_INACTIVE' | 'UNKNOWN' }>({ status: 'UNKNOWN' });
+  const [brokerSessionBusy, setBrokerSessionBusy] = useState<boolean>(false);
   const [ctraderFunctionalValidationBusy, setCtraderFunctionalValidationBusy] = useState<boolean>(false);
   const [ctraderFunctionalValidation, setCtraderFunctionalValidation] = useState<any | null>(null);
 
@@ -246,9 +246,6 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
   const [balanceSnapshots, setBalanceSnapshots] = useState<any[]>([]);
   const [balanceSnapshotBrokerFilter, setBalanceSnapshotBrokerFilter] = useState<string>('ALL');
   const [balanceSnapshotDateFilter, setBalanceSnapshotDateFilter] = useState<string>('');
-  const [newsSnapshot, setNewsSnapshot] = useState<any | null>(null);
-  const [newsBusy, setNewsBusy] = useState(false);
-  const [newsError, setNewsError] = useState<string | null>(null);
   const [indianNewsSnapshot, setIndianNewsSnapshot] = useState<any | null>(null);
   const [indianNewsBusy, setIndianNewsBusy] = useState(false);
 
@@ -423,11 +420,7 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
 
       if (newsRes?.ok) {
         const snapshot = await newsRes.json();
-        setNewsSnapshot(snapshot);
-        setNewsError(snapshot?.status === 'LIVE' ? null : (snapshot?.error || null));
-      } else if (newsRes) {
-        const payload = await newsRes.json().catch(() => ({}));
-        setNewsError(payload?.message || payload?.error || 'Live news endpoint unavailable.');
+        setIndianNewsSnapshot(snapshot);
       }
 
       if (auditLogsRes?.ok) {
@@ -532,35 +525,6 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
     }
   }, []);
 
-  const fetchNewsNow = useCallback(async () => {
-    setNewsBusy(true);
-    setNewsError(null);
-    try {
-      const response = await fetch('/api/india/news?refresh=true', {
-        cache: 'no-store',
-        headers: { Accept: 'application/json' }
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(payload?.message || payload?.error || `News refresh failed (HTTP ${response.status})`);
-      }
-      setNewsSnapshot(payload);
-      if (payload?.error) setNewsError(payload.error);
-      // Refresh the Auto Live telemetry as well so the header NEWS pill
-      // immediately reflects the same provider fetch that the operator just triggered.
-      const autoRes = await fetch('/api/auto-trading/status', { cache: 'no-store' }).catch(() => null);
-      if (autoRes?.ok) {
-        const autoStatus = await autoRes.json();
-        setAutoTradingStatus(autoStatus);
-        onAutoTradingStatusChange?.(autoStatus);
-      }
-    } catch (err: any) {
-      setNewsError(err?.message || 'Manual news refresh failed.');
-    } finally {
-      setNewsBusy(false);
-    }
-  }, []);
-
   const fetchIndianNewsNow = useCallback(async () => {
     setIndianNewsBusy(true);
     try {
@@ -570,6 +534,12 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
       });
       const payload = await response.json().catch(() => ({}));
       setIndianNewsSnapshot(payload);
+      const autoRes = await fetch('/api/auto-trading/status', { cache: 'no-store' }).catch(() => null);
+      if (autoRes?.ok) {
+        const autoStatus = await autoRes.json();
+        setAutoTradingStatus(autoStatus);
+        onAutoTradingStatusChange?.(autoStatus);
+      }
     } catch (err: any) {
       setIndianNewsSnapshot({
         status: 'UNAVAILABLE',
@@ -723,29 +693,20 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
     }
   }, []);
 
-  const runActiveAutoLiveMonitor = useCallback(async () => {
-    setActiveAutoLiveMonitorBusy(true);
+  const fetchBrokerSessionStatus = useCallback(async () => {
+    setBrokerSessionBusy(true);
     try {
-      const res = await fetch('/api/operations/active-auto-live-monitor', {
+      const res = await fetch('/api/operations/broker-session-status', {
         cache: 'no-store',
         headers: { Accept: 'application/json' }
       });
-      const data = await res.json().catch(() => ({}));
-      setActiveAutoLiveMonitor(data);
-      if (res.ok && data.healthy) {
-        setGateFeedback('Active Auto Live monitor is healthy.');
-      } else {
-        setGateFeedback(
-          Array.isArray(data?.criticalFailures) && data.criticalFailures.length
-            ? 'Active Auto Live safety monitor blocked: ' + data.criticalFailures.join(', ')
-            : (data?.failures?.length ? 'Active Auto Live monitor warning: ' + data.failures.join(', ') : (data?.message || 'Active Auto Live monitor is unavailable.'))
-        );
-      }
+      const data = await res.json().catch(() => ({ status: 'UNKNOWN' }));
+      setBrokerSession(data);
     } catch (err) {
-      console.warn('Active Auto Live monitor failed:', err);
-      setGateFeedback('Active Auto Live monitor failed.');
+      console.warn('Broker session status check failed:', err);
+      setBrokerSession({ status: 'UNKNOWN' });
     } finally {
-      setActiveAutoLiveMonitorBusy(false);
+      setBrokerSessionBusy(false);
     }
   }, []);
 
@@ -1066,13 +1027,13 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
             )}
             <button
               type="button"
-              onClick={fetchNewsNow}
-              disabled={newsBusy}
-              className="px-2.5 py-1 rounded border border-cyan-800 bg-cyan-950/40 text-cyan-300 hover:bg-cyan-900/50 text-[10px] font-mono font-bold disabled:opacity-50 flex items-center gap-1.5"
-              title="Force a fresh fetch from all configured news providers"
+              onClick={fetchIndianNewsNow}
+              disabled={indianNewsBusy}
+              className="px-2.5 py-1 rounded border border-cyan-800 bg-cyan-950/40 text-cyan-300 hover:bg-cyan-900/50 text-[10px] font-mono font-bold disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
+              title="Force a fresh fetch from all configured Indian news providers"
             >
-              <RefreshCw className={`w-3 h-3 ${newsBusy ? 'animate-spin' : ''}`} />
-              {newsBusy ? 'FETCHING NEWS...' : 'FETCH NEWS'}
+              <RefreshCw className={`w-3 h-3 ${indianNewsBusy ? 'animate-spin' : ''}`} />
+              {indianNewsBusy ? 'FETCHING NEWS...' : 'FETCH NEWS'}
             </button>
 
             {autoTradingStatus?.state === 'PREPARING' && autoTradingStatus?.preOpenPreparation && (
@@ -1321,86 +1282,7 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
             </table>
           </div>
 
-          <div className="mt-4 pt-4 border-t border-slate-800/70">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
-              <div>
-                <div className="text-xs font-bold text-slate-200 uppercase tracking-wider">Live News Provider Matrix</div>
-                <div className="text-[10px] text-slate-500 font-mono mt-1">
-                  Provider status is based on the latest fetch. Raw vs fresh counts show when a provider returned data that was later rejected by the freshness window.
-                </div>
-              </div>
-              <div className="flex items-center gap-2 font-mono text-[10px]">
-                <span className={`px-2 py-1 rounded border ${newsSnapshot?.status === 'LIVE' ? 'border-emerald-700 bg-emerald-950/50 text-emerald-300' : newsSnapshot?.status === 'NO_RESULTS' || newsSnapshot?.status === 'STALE' ? 'border-amber-700 bg-amber-950/50 text-amber-300' : 'border-rose-700 bg-rose-950/50 text-rose-300'}`}>
-                  NEWS ENGINE: {newsSnapshot?.status || 'NOT FETCHED'}
-                </span>
-                <span className="text-slate-500">
-                  {newsSnapshot?.articleCount ?? 0} usable articles
-                </span>
-              </div>
-            </div>
-
-            {newsError && (
-              <div className="mb-3 px-3 py-2 rounded border border-rose-800 bg-rose-950/30 text-rose-300 text-[10px] font-mono">
-                {newsError}
-              </div>
-            )}
-
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2">
-              {[
-                ['FINNHUB', 'Finnhub'],
-                ['MASSIVE', 'Massive'],
-                ['CURRENTS', 'Currents'],
-                ['GOOGLE_NEWS_RSS', 'Google News RSS']
-              ].map(([key, label]) => {
-                const d = newsSnapshot?.providerDiagnostics?.[key];
-                const status = d?.status || newsSnapshot?.providerStatus?.[key] || 'NO_RESULTS';
-                const strength = status === 'LIVE'
-                  ? (Number(d?.freshArticleCount || 0) >= 10 ? 'STRONG' : 'ACTIVE')
-                  : status === 'STALE' ? 'STALE DATA'
-                    : status === 'RATE_LIMITED' ? 'LIMITED'
-                      : status === 'ERROR' ? 'DOWN'
-                        : status === 'UNCONFIGURED' ? 'NOT CONFIGURED'
-                          : 'EMPTY';
-                const badge = status === 'LIVE'
-                  ? 'text-emerald-300 border-emerald-800 bg-emerald-950/40'
-                  : status === 'STALE' || status === 'RATE_LIMITED'
-                    ? 'text-amber-300 border-amber-800 bg-amber-950/40'
-                    : status === 'ERROR'
-                      ? 'text-rose-300 border-rose-800 bg-rose-950/40'
-                      : 'text-slate-400 border-slate-800 bg-slate-950';
-                return (
-                  <div key={key} className="p-3 rounded-lg border border-slate-800 bg-slate-950/70 font-mono">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[11px] font-bold text-white">{label}</span>
-                      <span className={`px-1.5 py-0.5 rounded border text-[9px] font-bold ${badge}`}>{status}</span>
-                    </div>
-                    <div className="grid grid-cols-3 gap-2 mt-2 text-[9px]">
-                      <div><div className="text-slate-600">RAW</div><div className="text-slate-300">{d?.rawArticleCount ?? 0}</div></div>
-                      <div><div className="text-slate-600">FRESH</div><div className="text-cyan-300">{d?.freshArticleCount ?? 0}</div></div>
-                      <div><div className="text-slate-600">STALE</div><div className="text-amber-300">{d?.staleArticleCount ?? 0}</div></div>
-                    </div>
-                    {d?.error && <div className="mt-2 text-[9px] text-rose-400 truncate" title={d.error}>{d.error}</div>}
-                    <div className="mt-2 flex items-center justify-between text-[9px] text-slate-600">
-                      <span>STALE {d?.staleArticleCount ?? 0}</span>
-                      <span>{Number.isFinite(Number(d?.latencyMs)) ? `${Number(d?.latencyMs)}ms` : '—'}</span>
-                    </div>
-                    {(d?.latestRawArticleAt || d?.latencyMs !== undefined) && (
-                      <div className="mt-2 text-[8px] text-slate-600">
-                        {d?.latestRawArticleAt ? `Latest raw: ${new Date(d.latestRawArticleAt).toLocaleTimeString()}` : 'No timestamp'}
-                        {d?.latencyMs !== undefined ? ` · ${d.latencyMs}ms` : ''}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="mt-3 text-[10px] text-slate-500 font-mono">
-              Last news fetch: {newsSnapshot?.fetchedAt ? new Date(newsSnapshot.fetchedAt).toLocaleTimeString() : 'N/A'}
-              {newsSnapshot?.latestArticleAt ? ` · Latest article: ${new Date(newsSnapshot.latestArticleAt).toLocaleTimeString()}` : ''}
-              {newsSnapshot?.queryPairs?.length ? ` · Universe: ${newsSnapshot.queryPairs.join(', ')}` : ''}
-            </div>
-          </div>
+          {/* End of Market Overview Section */}
         </div>
       )}
 
@@ -1681,7 +1563,7 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
                 <span>Signal Center & Qualification Lifecycle</span>
               </h3>
               <div className="text-xs text-slate-400 font-mono mt-0.5">
-                Production Champion Model: <strong className="text-emerald-400">gbt_forex_v1.0.0</strong> (Threshold 65.0%)
+                Production Champion Model: <strong className="text-emerald-400">gbt_indian_market_v1.0.0</strong> (Threshold 65.0%)
               </div>
             </div>
 
@@ -2387,12 +2269,12 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
                 <span className="text-slate-400">Active Auto Live Monitor:</span>
                 <button
                   type="button"
-                  onClick={runActiveAutoLiveMonitor}
-                  disabled={activeAutoLiveMonitorBusy}
+                  onClick={fetchBrokerSessionStatus}
+                  disabled={brokerSessionBusy}
                   className="px-2.5 py-1 rounded border border-violet-700 bg-violet-950/70 text-violet-300 hover:bg-violet-900/80 text-[10px] font-bold disabled:opacity-50"
-                  title="Check the live Auto Live runtime without changing the execution gate"
+                  title="Check the current broker session health"
                 >
-                  {activeAutoLiveMonitorBusy ? 'CHECKING...' : 'CHECK ACTIVE SESSION'}
+                  {brokerSessionBusy ? 'CHECKING...' : 'CHECK SESSION STATUS'}
                 </button>
               </div>
 

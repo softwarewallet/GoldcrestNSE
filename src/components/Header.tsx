@@ -36,12 +36,11 @@ export const Header: React.FC<HeaderProps> = ({
   const activeArea =
     activeTab === 'market' ? 'NSE / F&O' :
     activeTab === 'market_watch' ? 'MARKET WATCH' :
-    activeTab === 'control_center' || activeTab === 'pnl' ? 'ORDERS' :
+    activeTab === 'control_center' ? 'ORDERS' :
     activeTab === 'history' ? 'HISTORY' :
     activeTab === 'trading' ? 'POSITIONS' :
     activeTab === 'signals' ? 'STRATEGY' :
     activeTab === 'research' ? 'BACKTEST' :
-    activeTab === 'pnl' ? 'REPORTS' :
     activeTab === 'settings' ? 'SETTINGS' : 'INDIAN MARKET';
 
   const nseOpen = indianSession.isOpen;

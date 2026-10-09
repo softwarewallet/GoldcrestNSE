@@ -1,5 +1,5 @@
 import { executeQuery, executeRun } from '../database/db';
-import { LiveNewsSnapshot } from './liveNewsService';
+import { IndianNewsSnapshot } from './indianMarketNewsService';
 
 export interface LiveTradeResearchSignal {
   signalId: string;
@@ -36,7 +36,7 @@ export interface LiveTradeResearchSignal {
   } | null;
   requestedRiskQuantity?: number;
   configuredQuantity?: number;
-  news?: LiveNewsSnapshot | null;
+  news?: IndianNewsSnapshot | null;
   context?: Record<string, unknown>;
 }
 
@@ -62,29 +62,24 @@ function json(value: unknown): string {
   }
 }
 
-function pairNews(snapshot: LiveNewsSnapshot | null | undefined, symbol: string): unknown {
+function pairNews(snapshot: IndianNewsSnapshot | null | undefined, symbol: string): unknown {
   if (!snapshot) return null;
-  const pairRisk = snapshot.pairRisk?.[symbol];
   return {
     status: snapshot.status,
-    source: snapshot.source,
+    market: snapshot.market,
+    marketOpen: snapshot.marketOpen,
     fetchedAt: snapshot.fetchedAt,
     articleCount: snapshot.articleCount,
-    highImpactCount: snapshot.highImpactCount,
-    activeHighImpactCount: snapshot.activeHighImpactCount,
-    elevatedCount: snapshot.elevatedCount,
-    riskLevel: snapshot.riskLevel,
-    sentimentSummary: snapshot.sentimentSummary,
     providerStatus: snapshot.providerStatus,
-    pairRisk: pairRisk || null,
-    articles: snapshot.articles.slice(0, 50).map(article => ({
+    prediction: snapshot.prediction || null,
+    articles: (snapshot.articles || []).slice(0, 50).map(article => ({
       title: article.title,
+      url: article.url,
       source: article.source,
+      provider: article.provider,
       publishedAt: article.publishedAt,
       summary: article.summary || null,
-      sentimentScore: article.sentimentScore ?? null,
-      sentimentLabel: article.sentimentLabel || null,
-      topics: article.topics || []
+      sentimentScore: article.sentimentScore ?? null
     }))
   };
 }

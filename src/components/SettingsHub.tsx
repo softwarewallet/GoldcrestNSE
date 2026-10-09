@@ -395,7 +395,7 @@ export const SettingsHub: React.FC<SettingsHubProps> = ({
   onBrokerSelect,
   onRefreshGlobal
 }) => {
-  const [activeSettingsSection, setActiveSettingsSection] = useState<'BROKER_CONFIG' | 'LIVE_LOG' | 'RESEARCH_AI'>('BROKER_CONFIG');
+  const [activeSettingsSection] = useState<'BROKER_CONFIG'>('BROKER_CONFIG');
 
   return (
     <div id="unified_settings_hub" className="space-y-4">
@@ -406,9 +406,7 @@ export const SettingsHub: React.FC<SettingsHubProps> = ({
             SETTINGS AREA:
           </span>
           {[
-            { id: 'BROKER_CONFIG', label: 'BROKER & RISK CONFIGURATION', icon: Server },
-            { id: 'LIVE_LOG', label: 'LIVE RUNTIME LOG', icon: Activity },
-            { id: 'RESEARCH_AI', label: 'OPTIONAL AI SERVERS', icon: Cpu }
+            { id: 'BROKER_CONFIG', label: 'BROKER & RISK CONFIGURATION', icon: Server }
           ].map(tab => {
             const Icon = tab.icon;
             const isSel = activeSettingsSection === tab.id;
@@ -416,7 +414,6 @@ export const SettingsHub: React.FC<SettingsHubProps> = ({
               <button
                 key={tab.id}
                 id={`settings_section_${tab.id.toLowerCase()}`}
-                onClick={() => setActiveSettingsSection(tab.id as any)}
                 className={`flex items-center space-x-1.5 px-3.5 py-2 rounded-lg font-bold transition whitespace-nowrap ${
                   isSel
                     ? 'bg-emerald-600 text-white shadow-sm'
@@ -435,12 +432,6 @@ export const SettingsHub: React.FC<SettingsHubProps> = ({
           <span>Encrypted Secure Storage</span>
         </div>
       </div>
-
-      {activeSettingsSection === 'RESEARCH_AI' && <ResearchAiServerSettings />}
-
-      {activeSettingsSection === 'LIVE_LOG' && (
-        <LiveRuntimeLogSettings />
-      )}
 
       {/* Render Selected Sub-Section */}
       {activeSettingsSection === 'BROKER_CONFIG' && (

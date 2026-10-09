@@ -506,26 +506,8 @@ async function mapWithConcurrency<T, R>(
 }
 
 export async function syncMarketHistory(options: { forceFull?: boolean; symbols?: string[] } = {}): Promise<MarketHistorySyncStatus[]> {
-  if (syncInFlight) {
-    return getMarketHistorySyncStatus();
-  }
-
-  syncInFlight = true;
-  const symbols = (options.symbols?.length ? options.symbols : FOREX_PAIRS.map(pair => pair.symbol))
-    .map(normalizeSymbol)
-    .filter((symbol, index, list) => list.indexOf(symbol) === index);
-
-  try {
-    const results = await mapWithConcurrency(
-      symbols,
-      PAIR_CONCURRENCY,
-      symbol => syncPair(symbol, Boolean(options.forceFull))
-    );
-    lastGlobalSyncAt = Date.now();
-    return results;
-  } finally {
-    syncInFlight = false;
-  }
+  // Retired: System is configured for Indian markets only (5paisa). Forex history sync is disabled.
+  return [];
 }
 
 export async function getMarketHistorySyncStatus(): Promise<MarketHistorySyncStatus[]> {
@@ -686,18 +668,13 @@ export async function getMarketTrendContext(symbol: string): Promise<{
 }
 
 export function startMarketHistoryScheduler(): void {
-  if (syncTimer) return;
-  syncTimer = setInterval(() => {
-    void syncMarketHistory();
-  }, SYNC_INTERVAL_MS);
-  syncTimer.unref?.();
+  // Retired: System is configured for Indian markets only (5paisa). Forex history scheduler is disabled.
+  return;
 }
 
 export function stopMarketHistoryScheduler(): void {
-  if (syncTimer) {
-    clearInterval(syncTimer);
-    syncTimer = null;
-  }
+  // Retired: System is configured for Indian markets only (5paisa).
+  return;
 }
 
 export function getMarketHistorySchedulerStatus() {

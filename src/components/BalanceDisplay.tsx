@@ -117,7 +117,7 @@ export const BalanceDisplay: React.FC<BalanceDisplayProps> = () => {
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
-        throw new Error(data.error || '5paisa TOTP authentication failed');
+        throw new Error(data.error || data.message || '5paisa TOTP authentication failed');
       }
 
       setTotpSuccess('Session established successfully!');

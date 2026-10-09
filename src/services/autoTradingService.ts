@@ -5,7 +5,7 @@ import { ForexSignalEngine } from '../markets/forex/signalEngine';
 import { getForexSessionState } from '../markets/common/session';
 import { getAutoLiveMarketGate, AutoLiveMarketGate } from './marketOpenGate';
 import { getMarketTrendContext } from './marketHistoryService';
-import { fetchLiveForexNews, LiveNewsSnapshot } from './liveNewsService';
+import { fetchIndianMarketNews, IndianNewsSnapshot } from './indianMarketNewsService';
 import { brokerRegistry } from '../brokers/registry';
 import { autoExecutionEngine, LIVE_AUTO_EXECUTION_ALLOWED, armAutonomousExecutionGate, refreshAutonomousExecutionPermission, disarmLocalAutonomousExecution } from '../brokers/safety/AutoExecutionEngine';
 import { autoTradeReadinessService } from '../brokers/safety/AutoTradeReadiness';
@@ -191,7 +191,7 @@ export interface AutoTradingStatus {
   preOpenPreparation: {
     lastPreparedAt: number | null;
     trendPairsEvaluated: number;
-    news: LiveNewsSnapshot | null;
+    news: IndianNewsSnapshot | null;
     status: 'IDLE' | 'RUNNING' | 'READY' | 'UNAVAILABLE';
   };
   requiresClosedMarketConfirmation?: boolean;
@@ -207,10 +207,10 @@ class AutoTradingService {
   private lastActions: AutoTradingStatus['lastActions'] = [];
   private lastPreOpenPreparedAt: number | null = null;
   private preOpenTrendPairsEvaluated = 0;
-  private preOpenNews: LiveNewsSnapshot | null = null;
+  private preOpenNews: IndianNewsSnapshot | null = null;
   // Snapshot of the authoritative news input used by the current Auto Live
   // cycle. It is copied into the research ledger with each evaluated signal.
-  private currentCycleNews: LiveNewsSnapshot | null = null;
+  private currentCycleNews: IndianNewsSnapshot | null = null;
   private preOpenStatus: 'IDLE' | 'RUNNING' | 'READY' | 'UNAVAILABLE' = 'IDLE';
   private cycleInFlight = false;
   // When the authoritative system-wide live-position limit is full, Auto Live
@@ -744,9 +744,7 @@ class AutoTradingService {
         return;
       }
 
-      const newsPromise = fetchLiveForexNews({
-        pairs: getConfiguredAutoForexPairs()
-      });
+      const newsPromise = fetchIndianMarketNews();
       const trendResultsRaw = await mapWithConcurrency(
         getConfiguredAutoForexPairs(),
         PREOPEN_PAIR_CONCURRENCY,
@@ -797,14 +795,10 @@ class AutoTradingService {
         this.preOpenNews.status === 'UNAVAILABLE' ? 'WARN' : 'INFO',
         'PREOPEN_NEWS_EVALUATED',
         {
-          source: this.preOpenNews.source,
+          market: this.preOpenNews.market,
           status: this.preOpenNews.status,
           articleCount: this.preOpenNews.articleCount,
-          highImpactCount: this.preOpenNews.highImpactCount,
-          elevatedCount: this.preOpenNews.elevatedCount,
-          riskLevel: this.preOpenNews.riskLevel,
           providerStatus: this.preOpenNews.providerStatus,
-          sentimentSummary: this.preOpenNews.sentimentSummary,
           error: this.preOpenNews.error
         }
       );
@@ -815,13 +809,12 @@ class AutoTradingService {
         : 'READY';
       this.lastCycleResult = this.preOpenNews.status === 'UNAVAILABLE'
         ? `Pre-open trend preparation completed for ${trendResults.length} pairs, but live news is unavailable. No trade is placed until the normal execution gates pass.`
-        : `Pre-open preparation completed: ${trendResults.length} live Forex pairs evaluated and live news checked. Waiting for a supported market to open.`;
+        : `Pre-open preparation completed: ${trendResults.length} live Indian underlyings evaluated and live news checked. Waiting for Indian market to open.`;
 
       liveRuntimeLog('INFO', 'PREOPEN_PREPARATION_COMPLETED', {
         marketGate,
         trendPairsEvaluated: trendResults.length,
         newsStatus: this.preOpenNews.status,
-        newsRiskLevel: this.preOpenNews.riskLevel,
         preparedAt: this.lastPreOpenPreparedAt
       });
     } catch (error: any) {
@@ -880,26 +873,19 @@ class AutoTradingService {
       // Live news is an execution input, not just a display metric. The
       // deterministic technical strategy can only enter a new trade when a
       // current authoritative news snapshot is available.
-      const cycleNews = await fetchLiveForexNews({
-        pairs: getConfiguredAutoForexPairs()
-      });
+      const cycleNews = await fetchIndianMarketNews();
       this.preOpenNews = cycleNews;
       this.currentCycleNews = cycleNews;
-      this.preOpenStatus = cycleNews.status === 'LIVE' ? 'READY' : 'UNAVAILABLE';
+      this.preOpenStatus = (cycleNews.status === 'LIVE' || cycleNews.status === 'NO_RESULTS' || cycleNews.status === 'MARKET_CLOSED') ? 'READY' : 'UNAVAILABLE';
 
       liveRuntimeLog(
         cycleNews.status === 'LIVE' ? 'INFO' : 'WARN',
-        'LIVE_NEWS_CYCLE_INPUT',
+        'INDIAN_NEWS_CYCLE_INPUT',
         {
-          source: cycleNews.source,
+          market: cycleNews.market,
           status: cycleNews.status,
           articleCount: cycleNews.articleCount,
-          highImpactCount: cycleNews.highImpactCount,
-          activeHighImpactCount: cycleNews.activeHighImpactCount,
-          elevatedCount: cycleNews.elevatedCount,
-          riskLevel: cycleNews.riskLevel,
           providerStatus: cycleNews.providerStatus,
-          sentimentSummary: cycleNews.sentimentSummary,
           error: cycleNews.error
         }
       );
@@ -913,30 +899,14 @@ class AutoTradingService {
         this.lastCycleResult = 'Auto Live cycle blocked: authoritative live news is unavailable. No new trade is submitted.';
         liveRuntimeLog('WARN', 'AUTO_TRADING_BLOCKED_NEWS_UNAVAILABLE', {
           status: cycleNews.status,
-          source: cycleNews.source,
+          market: cycleNews.market,
           error: cycleNews.error
         });
         return;
       }
 
       const configuredPairs = getConfiguredAutoForexPairs();
-      const blockedNewsPairs = configuredPairs.filter(pair => {
-        const pairRisk = cycleNews.pairRisk?.[pair];
-        // Backward-compatible fallback for snapshots produced by an older
-        // process without pairRisk diagnostics.
-        return pairRisk
-          ? pairRisk.riskLevel === 'HIGH'
-          : cycleNews.riskLevel === 'HIGH';
-      });
-
-      if (blockedNewsPairs.length > 0) {
-        liveRuntimeLog('WARN', 'AUTO_TRADING_PAIR_NEWS_BLOCKS', {
-          blockedPairs: blockedNewsPairs,
-          articleCount: cycleNews.articleCount,
-          highImpactCount: cycleNews.highImpactCount,
-          pairRisk: cycleNews.pairRisk
-        });
-      }
+      const blockedNewsPairs: string[] = [];
 
       const pairsToEvaluate = configuredPairs.filter(pair => !blockedNewsPairs.includes(pair));
       liveRuntimeLog('INFO', 'AUTO_TRADING_SCAN_UNIVERSE', {
@@ -957,8 +927,7 @@ class AutoTradingService {
       }
 
       for (const pair of blockedNewsPairs) {
-        const pairRisk = cycleNews.pairRisk?.[pair];
-        const reason = 'Active pair-relevant high-impact news is inside the configured blackout window for ' + pair + '.';
+        const reason = 'Active news blackout window for ' + pair + '.';
         this.lastActions.push({
           pair,
           result: 'BLOCKED',
@@ -967,8 +936,7 @@ class AutoTradingService {
         liveRuntimeLog('WARN', 'AUTO_TRADING_PAIR_BLOCKED_NEWS', {
           pair,
           signalId: undefined,
-          reason,
-          pairRisk: pairRisk || null
+          reason
         });
       }
 

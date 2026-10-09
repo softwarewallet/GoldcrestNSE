@@ -310,7 +310,7 @@ export default function App() {
               />
             )}
 
-              {(activeTab === 'control_center' || activeTab === 'pnl' || activeTab === 'accounting' || activeTab === 'operations' || activeTab === 'reconciliation' || activeTab === 'reconcile') && (
+              {(activeTab === 'control_center' || activeTab === 'accounting' || activeTab === 'operations' || activeTab === 'reconciliation' || activeTab === 'reconcile') && (
                 <TradingControlCenter
                 onSelectSignalModal={(sig) => setSelectedSignal(sig)}
                 autoTradingStatus={autoTradingStatus}

@@ -33,7 +33,7 @@ export function requestId(req: Request, res: Response, next: NextFunction): void
 }
 
 export function apiRateLimit(req: Request, res: Response, next: NextFunction): void {
-  if (!req.path.startsWith('/api') || req.path === '/api/health') {
+  if (!req.path.startsWith('/api') || req.path === '/api/health' || req.path === '/api/brokers/fivepaisa/totp-login') {
     next();
     return;
   }

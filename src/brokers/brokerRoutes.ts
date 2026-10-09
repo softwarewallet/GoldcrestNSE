@@ -1386,13 +1386,14 @@ brokerRouter.post('/fivepaisa/totp-login', async (req: Request, res: Response) =
   } catch (err: any) {
     const isRateLimited = String(err?.message || '').includes('RATE_LIMITED');
     const rateLimitState = FivePaisaBrokerAdapter.getRateLimitState();
+    const remainingSec = rateLimitState?.remainingSeconds || 60;
     res.status(isRateLimited ? 429 : 400).json({
       error: isRateLimited
-        ? '5paisa authentication is temporarily rate-limited. Wait before attempting authentication again.'
+        ? `5paisa authentication is temporarily rate-limited (HTTP 429). Please wait ${remainingSec} seconds before submitting a new TOTP code.`
         : (err.message || '5paisa TOTP authentication failed'),
       code: isRateLimited ? 'RATE_LIMITED' : 'AUTHENTICATION_FAILED',
       timestamp: Date.now(),
-      retryAfterSeconds: rateLimitState?.remainingSeconds || 60,
+      retryAfterSeconds: remainingSec,
       provider: '5paisa',
       endpoint: '/VendorsAPI/Service1.svc/TOTPLogin'
     });
