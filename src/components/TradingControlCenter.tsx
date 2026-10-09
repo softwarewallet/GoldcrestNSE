@@ -2278,6 +2278,7 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
                 </button>
               </div>
 
+              {/*
               {activeAutoLiveMonitor && (
                 <div className="bg-slate-900/70 p-2.5 rounded border border-slate-800 space-y-2">
                   <div className="flex items-center justify-between">
@@ -2305,6 +2306,7 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
                   )}
                 </div>
               )}
+              */}
 
               <div className="flex items-center justify-between gap-2 bg-slate-900/80 p-2 rounded border border-slate-800">
                 <span className="text-slate-400">Production Go-Live Validation:</span>
