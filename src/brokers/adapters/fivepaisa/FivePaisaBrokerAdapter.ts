@@ -1403,6 +1403,95 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
     const reservationToken = order.firstLiveReservationToken || (order as any)._firstLiveReservationToken;
     let isAuthorizedFirstLive = false;
 
+    // Validate Manual Trade authorization token if present
+    const manualToken = (order as any).manualAuthorizationToken || (order as any)._manualAuthorizationToken;
+    let isAuthorizedManualTrade = false;
+
+    if (manualToken) {
+      const tokenHash = crypto.createHash('sha256').update(manualToken).digest('hex');
+      const authId = (order as any)._manualAuthorizationId;
+      const rows = await executeQuery<any>(
+        'SELECT * FROM manual_trade_authorizations WHERE id = ? OR authorization_token_hash = ? LIMIT 1',
+        [authId || tokenHash, tokenHash]
+      );
+
+      const manualAuth = rows[0];
+      if (!manualAuth) {
+        throw new BrokerError(
+          'MANUAL_TRADE_NOT_AUTHORIZED',
+          'MANUAL_TRADE_NOT_AUTHORIZED: Manual trade authorization token is invalid.',
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+
+      if (manualAuth.status !== 'RESERVED') {
+        throw new BrokerError(
+          'MANUAL_TRADE_NOT_AUTHORIZED',
+          `MANUAL_TRADE_NOT_AUTHORIZED: Manual trade authorization status is '${manualAuth.status}', expected 'RESERVED'.`,
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+
+      if (manualAuth.broker !== 'FIVE_PAISA') {
+        throw new BrokerError(
+          'MANUAL_TRADE_NOT_AUTHORIZED',
+          `MANUAL_TRADE_NOT_AUTHORIZED: Broker mismatch (Expected FIVE_PAISA, got ${manualAuth.broker}).`,
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+
+      if (manualAuth.environment !== 'LIVE') {
+        throw new BrokerError(
+          'MANUAL_TRADE_NOT_AUTHORIZED',
+          `MANUAL_TRADE_NOT_AUTHORIZED: Environment mismatch (Expected LIVE, got ${manualAuth.environment}).`,
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+
+      if (manualAuth.symbol !== order.symbol) {
+        throw new BrokerError(
+          'MANUAL_TRADE_NOT_AUTHORIZED',
+          `MANUAL_TRADE_NOT_AUTHORIZED: Symbol mismatch (Authorized: ${manualAuth.symbol}, Order: ${order.symbol}).`,
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+
+      if (manualAuth.side !== order.side) {
+        throw new BrokerError(
+          'MANUAL_TRADE_NOT_AUTHORIZED',
+          `MANUAL_TRADE_NOT_AUTHORIZED: Side mismatch (Authorized: ${manualAuth.side}, Order: ${order.side}).`,
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+
+      if (Number(manualAuth.quantity) !== Number(order.quantity)) {
+        throw new BrokerError(
+          'MANUAL_TRADE_NOT_AUTHORIZED',
+          `MANUAL_TRADE_NOT_AUTHORIZED: Quantity mismatch (Authorized: ${manualAuth.quantity}, Order: ${order.quantity}).`,
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+
+      if (Number(manualAuth.estimated_outlay) > 20.00 + 1e-6) {
+        throw new BrokerError(
+          'MANUAL_TRADE_NOT_AUTHORIZED',
+          `MANUAL_TRADE_NOT_AUTHORIZED: Outlay ₹${manualAuth.estimated_outlay} exceeds ₹20 budget.`,
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+
+      (order as any)._manualAuthRecord = manualAuth;
+      isAuthorizedManualTrade = true;
+    }
+
     if (reservationToken) {
       const tokenHash = hashReservationToken(reservationToken);
       const rows = await executeQuery<any>(
@@ -1626,7 +1715,7 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
       isAuthorizedFirstLive = true;
     }
 
-    if (executionMode === 'FIRST_LIVE_CERTIFICATION' && !isAuthorizedFirstLive) {
+    if (executionMode === 'FIRST_LIVE_CERTIFICATION' && !isAuthorizedFirstLive && !isAuthorizedManualTrade) {
       throw new BrokerError(
         'FIRST_LIVE_ORDER_NOT_AUTHORIZED',
         'FIRST_LIVE_ORDER_NOT_AUTHORIZED: Direct broker order call blocked in FIRST_LIVE_CERTIFICATION mode without a valid server reservation token.',
@@ -1635,7 +1724,7 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
       );
     }
 
-    if (executionMode === 'LIVE_DRY_RUN' && !isAuthorizedFirstLive) {
+    if (executionMode === 'LIVE_DRY_RUN' && !isAuthorizedFirstLive && !isAuthorizedManualTrade) {
       throw new BrokerError(
         'LIVE_ORDER_BLOCKED_BY_DRY_RUN',
         'LIVE_ORDER_BLOCKED_BY_DRY_RUN: Order placement is blocked because GoldcrestNSE is running in LIVE_DRY_RUN mode. No real broker orders are transmitted.',
@@ -1720,6 +1809,26 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
       const expectedSideOrderType = order.side === 'BUY' ? 'Buy' : 'Sell';
       if (payload.body.OrderType !== expectedSideOrderType) {
         throw new BrokerError('FIRST_LIVE_ORDER_NOT_AUTHORIZED', `FIRST_LIVE_ORDER_NOT_AUTHORIZED: Payload OrderType '${payload.body.OrderType}' does not match order side '${order.side}'.`, 'FIVE_PAISA', this.environment);
+      }
+    }
+
+    const manualAuth = (order as any)._manualAuthRecord;
+    if (manualAuth) {
+      if (manualAuth.exchange && manualAuth.exchange !== payload.body.Exchange) {
+        throw new BrokerError('MANUAL_TRADE_NOT_AUTHORIZED', `Payload Exchange '${payload.body.Exchange}' does not match authorization '${manualAuth.exchange}'.`, 'FIVE_PAISA', this.environment);
+      }
+      if (manualAuth.exchange_type && manualAuth.exchange_type !== payload.body.ExchangeType) {
+        throw new BrokerError('MANUAL_TRADE_NOT_AUTHORIZED', `Payload ExchangeType '${payload.body.ExchangeType}' does not match authorization '${manualAuth.exchange_type}'.`, 'FIVE_PAISA', this.environment);
+      }
+      if (manualAuth.scrip_code && String(manualAuth.scrip_code) !== String(payload.body.ScripCode)) {
+        throw new BrokerError('MANUAL_TRADE_NOT_AUTHORIZED', `Payload ScripCode '${payload.body.ScripCode}' does not match authorization '${manualAuth.scrip_code}'.`, 'FIVE_PAISA', this.environment);
+      }
+      if (Number(manualAuth.quantity) !== Number(payload.body.Qty)) {
+        throw new BrokerError('MANUAL_TRADE_NOT_AUTHORIZED', `Payload Qty '${payload.body.Qty}' does not match authorization '${manualAuth.quantity}'.`, 'FIVE_PAISA', this.environment);
+      }
+      const finalPrice = order.orderType === 'MARKET' ? 0 : Number(order.price || 0);
+      if (Number(payload.body.Price) !== finalPrice) {
+        throw new BrokerError('MANUAL_TRADE_NOT_AUTHORIZED', `Payload Price '${payload.body.Price}' does not match final order price '${finalPrice}'.`, 'FIVE_PAISA', this.environment);
       }
     }
 

@@ -18,6 +18,7 @@
     "test:5paisa-connectivity": "cross-env GOLDCREST_DB_FILE=data/test_5paisa_live_connectivity.sqlite tsx test/test_5paisa_live_connectivity_certification.ts",
     "test:5paisa-connectivity-suite": "cross-env GOLDCREST_DB_FILE=data/test_5paisa_live_connectivity.sqlite tsx test/test_5paisa_live_connectivity_unit.ts",
     "test:5paisa-audit-writer": "tsx test/test_5paisa_audit_log_writer.ts",
+    "test:manual-trade": "tsx test/test_manual_single_trade_certification.ts",
     "test:5paisa-diagnostic": "tsx test/test_5paisa_live_connectivity_diagnostic.ts",
     "test:auto_trade_readiness": "tsx test/test_auto_trade_readiness.ts",
     "test:phase8_5": "tsx test/test_phase8_5_broker_execution_certification.ts",

@@ -40,10 +40,12 @@ import {
   TrendingUp,
   Unlock,
   XCircle,
-  Zap
+  Zap,
+  Send
 } from 'lucide-react';
 import { BrokerType, TradingEnvironment, OrderRequest } from '../brokers/types';
 import { TradingSignal } from '../markets/common/types';
+import { ManualTradePanel } from './ManualTradePanel';
 
 export type ControlCenterSection =
   | 'ALL_OVERVIEW'
@@ -54,6 +56,7 @@ export type ControlCenterSection =
   | 'SIGNAL_CENTER'
   | 'POSITIONS'
   | 'ORDERS'
+  | 'MANUAL_TRADE'
   | 'RISK_CENTER'
   | 'RECONCILIATION'
   | 'SYSTEM_HEALTH'
@@ -1131,6 +1134,7 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
             { id: 'SIGNAL_CENTER', label: '4. SIGNALS', icon: Sparkles },
             { id: 'POSITIONS', label: '5. POSITIONS', icon: Layers },
             { id: 'ORDERS', label: '6. ORDERS', icon: FileText },
+            { id: 'MANUAL_TRADE', label: 'MANUAL TRADE', icon: Send },
             { id: 'RISK_CENTER', label: '7. RISK CENTER', icon: ShieldAlert },
             { id: 'RECONCILIATION', label: '8. RECONCILIATION', icon: CheckCircle2 },
             { id: 'SYSTEM_HEALTH', label: '9. HEALTH & APIS', icon: Server },
@@ -1982,6 +1986,13 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {/* SECTION: MANUAL SINGLE-TRADE INTERFACE (Phase C) */}
+      {(activeSection === 'ALL_OVERVIEW' || activeSection === 'MANUAL_TRADE') && (
+        <div id="section_manual_trade" className="space-y-3">
+          <ManualTradePanel />
         </div>
       )}
 

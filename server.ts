@@ -96,6 +96,7 @@ import { evaluateProductionGoLiveValidation } from './src/services/productionGoL
 import { evaluateActiveAutoLiveMonitor } from './src/services/activeAutoLiveMonitorService';
 import { evaluateCTraderFunctionalValidation } from './src/services/cTraderFunctionalValidationService';
 import { maskIdentifier } from './src/brokers/auditLog';
+import { manualTradeService } from './src/services/manualTradeService';
 
 const invokedByNpmDev = process.env.npm_lifecycle_event === 'dev';
 // npm run dev is an explicit local development command. Do not let a stale
@@ -930,6 +931,87 @@ app.get('/api/operations/fivepaisa-connection-verification', operatorAuthRequire
 });
 
 app.get('/api/operations/active-auto-live-monitor', operatorAuthRequired, handleActiveAutoLiveMonitor);
+
+// ==========================================
+// Phase C — Manual Single-Trade Interface API
+// ==========================================
+app.get('/api/manual-trade/account', operatorAuthRequired, async (_req: Request, res: Response) => {
+  try {
+    const summary = await manualTradeService.getAccountSummary();
+    res.json(summary);
+  } catch (error: any) {
+    liveRuntimeLog('ERROR', 'MANUAL_TRADE_ACCOUNT_SUMMARY_FAILED', {
+      error: error?.message || String(error)
+    });
+    res.status(500).json({
+      error: 'MANUAL_TRADE_ACCOUNT_ERROR',
+      message: error?.message || 'Failed to fetch manual trade account summary.'
+    });
+  }
+});
+
+app.get('/api/manual-trade/instruments', operatorAuthRequired, async (req: Request, res: Response) => {
+  try {
+    const query = typeof req.query.q === 'string' ? req.query.q : undefined;
+    const instruments = await manualTradeService.getAuthoritativeInstruments(query);
+    res.json(instruments);
+  } catch (error: any) {
+    liveRuntimeLog('ERROR', 'MANUAL_TRADE_INSTRUMENTS_FAILED', {
+      error: error?.message || String(error)
+    });
+    res.status(500).json({
+      error: 'MANUAL_TRADE_INSTRUMENTS_ERROR',
+      message: error?.message || 'Failed to fetch authoritative instruments.'
+    });
+  }
+});
+
+app.post('/api/manual-trade/prepare', operatorAuthRequired, async (req: Request, res: Response) => {
+  try {
+    const result = await manualTradeService.prepareManualTrade(req.body);
+    if (!result.ready) {
+      return res.status(400).json(result);
+    }
+    res.json(result);
+  } catch (error: any) {
+    liveRuntimeLog('ERROR', 'MANUAL_TRADE_PREPARE_FAILED', {
+      error: error?.message || String(error)
+    });
+    res.status(500).json({
+      error: 'MANUAL_TRADE_PREPARE_ERROR',
+      message: error?.message || 'Failed to prepare manual trade.'
+    });
+  }
+});
+
+app.post('/api/manual-trade/confirm', operatorAuthRequired, async (req: Request, res: Response) => {
+  try {
+    const result = await manualTradeService.confirmAndExecuteManualTrade(req.body);
+    res.json(result);
+  } catch (error: any) {
+    liveRuntimeLog('ERROR', 'MANUAL_TRADE_CONFIRM_FAILED', {
+      error: error?.message || String(error)
+    });
+    res.status(400).json({
+      success: false,
+      error: error?.code || 'MANUAL_TRADE_EXECUTION_FAILED',
+      message: error?.message || 'Failed to execute manual trade.'
+    });
+  }
+});
+
+app.get('/api/manual-trade/recent', operatorAuthRequired, async (req: Request, res: Response) => {
+  try {
+    const limit = Number(req.query.limit) || 20;
+    const records = await manualTradeService.getRecentAuthorizations(limit);
+    res.json(records);
+  } catch (error: any) {
+    res.status(500).json({
+      error: 'MANUAL_TRADE_RECENT_ERROR',
+      message: error?.message || 'Failed to fetch recent manual trade authorizations.'
+    });
+  }
+});
 
 app.get('/api/observability/runtime', operatorAuthRequired, async (_req: Request, res: Response) => {
   try {

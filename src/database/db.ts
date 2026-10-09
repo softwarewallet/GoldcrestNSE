@@ -551,6 +551,42 @@ function initSchema(db: Database) {
       lot_size REAL
     );
 
+    -- 29.1. Manual Single-Trade Authorizations (Phase C)
+    CREATE TABLE IF NOT EXISTS manual_trade_authorizations (
+      id TEXT PRIMARY KEY,
+      authorization_token_hash TEXT NOT NULL,
+      fingerprint TEXT NOT NULL,
+      correlation_id TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      operator_id TEXT,
+      broker TEXT NOT NULL,
+      environment TEXT NOT NULL,
+      account_id TEXT NOT NULL,
+      market TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      exchange TEXT NOT NULL,
+      exchange_type TEXT NOT NULL,
+      scrip_code TEXT NOT NULL,
+      side TEXT NOT NULL,
+      order_type TEXT NOT NULL,
+      quantity REAL NOT NULL,
+      lot_size REAL NOT NULL,
+      price REAL NOT NULL,
+      stop_loss REAL,
+      take_profit REAL,
+      estimated_outlay REAL NOT NULL,
+      small_trade_budget REAL NOT NULL,
+      status TEXT NOT NULL,
+      rejection_reason TEXT,
+      broker_order_id TEXT,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      confirmed_at INTEGER,
+      consumed_at INTEGER,
+      payload_json TEXT NOT NULL,
+      result_json TEXT
+    );
+
     -- 30. Autonomous Execution Idempotency
     CREATE TABLE IF NOT EXISTS execution_intents (
       idempotency_key TEXT PRIMARY KEY,
