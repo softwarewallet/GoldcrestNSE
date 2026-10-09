@@ -967,46 +967,68 @@ app.get('/api/operations/active-auto-live-monitor', operatorAuthRequired, async 
       }
     );
 
-    return res.status(monitor.statusCode).json({
+    const responsePayload: any = {
       phase: '9.6',
       generatedAt: Date.now(),
       runtimeId: GOLDCREST_RUNTIME_ID,
       environment: process.env.NODE_ENV || 'development',
       tradingMode: 'LIVE_ONLY',
+      brokerType: selectedBroker,
       status: monitor.status,
       healthy: monitor.healthy,
       checks: monitor.checks,
       failures: monitor.failures,
       criticalFailures: monitor.criticalFailures,
-      cTrader: {
-        apiMode: getCTraderApiMode(),
-        apiEndpoint: connection?.apiEndpoint || null,
-        connected: connection?.connected === true,
-        accountId: account ? maskIdentifier(String(account.accountId || '')) : null,
-        accountCurrency: account?.currency || null,
-        accountType: account?.accountType || null,
-        balance: account?.balance ?? null,
-        equity: account?.equity ?? null,
-        tradingPermission,
-        accountConsistency: {
-          status: accountConsistency.status,
-          consistent: accountConsistency.consistent,
-          snapshotAgeMs: accountConsistency.snapshotAgeMs,
-          balanceDelta: accountConsistency.balanceDelta,
-          equityDelta: accountConsistency.equityDelta
-        }
-      },
-      executionGate: {
+    };
+
+    if (selectedBroker === 'CTRADER') {
+        responsePayload.cTrader = {
+            apiMode: getCTraderApiMode(),
+            apiEndpoint: connection?.apiEndpoint || null,
+            connected: connection?.connected === true,
+            accountId: account ? maskIdentifier(String(account.accountId || '')) : null,
+            accountCurrency: account?.currency || null,
+            accountType: account?.accountType || null,
+            balance: account?.balance ?? null,
+            equity: account?.equity ?? null,
+            tradingPermission,
+            accountConsistency: {
+              status: accountConsistency.status,
+              consistent: accountConsistency.consistent,
+              snapshotAgeMs: accountConsistency.snapshotAgeMs,
+              balanceDelta: accountConsistency.balanceDelta,
+              equityDelta: accountConsistency.equityDelta
+            }
+        };
+    } else {
+        responsePayload.fivePaisa = {
+            connected: connection?.connected === true,
+            accountId: account ? maskIdentifier(String(account.accountId || '')) : null,
+            accountType: account?.accountType || null,
+            balance: account?.balance ?? null,
+            tradingPermission,
+            accountConsistency: {
+              status: accountConsistency.status,
+              consistent: accountConsistency.consistent,
+              snapshotAgeMs: accountConsistency.snapshotAgeMs,
+              balanceDelta: accountConsistency.balanceDelta,
+              equityDelta: accountConsistency.equityDelta
+            }
+        };
+    }
+
+    responsePayload.executionGate = {
         unlocked: executionGateUnlocked,
         locked: !executionGateUnlocked
-      },
-      autoTrading: {
+    };
+    responsePayload.autoTrading = {
         state: observability.autoTrading.state,
         currentExecution: observability.autoTrading.currentExecution,
         lastExecution: observability.autoTrading.lastExecution
-      },
-      unresolvedExecutionIntents: observability.executionIntents
-    });
+    };
+    responsePayload.unresolvedExecutionIntents = observability.executionIntents;
+
+    return res.status(monitor.statusCode).json(responsePayload);
   } catch (error: any) {
     liveRuntimeLog('ERROR', 'ACTIVE_AUTO_LIVE_MONITOR_FAILED', {
       error: error?.message || String(error)

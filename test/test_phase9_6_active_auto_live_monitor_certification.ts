@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { evaluateActiveAutoLiveMonitor, type ActiveAutoLiveMonitorInput, type CTraderInput, type FivePaisaInput } from '../src/services/activeAutoLiveMonitorService';
+import { evaluateActiveAutoLiveMonitor, type CTraderInput, type FivePaisaInput } from '../src/services/activeAutoLiveMonitorService';
 
 const commonValid = {
   configurationIntegrityOk: true,
@@ -41,25 +41,40 @@ const validFivePaisa: FivePaisaInput = {
 const scenarios: Array<{id:number;name:string;run:()=>void}> = [];
 const add=(id:number,name:string,run:()=>void)=>scenarios.push({id,name,run});
 
+// Healthy cases
 add(1, 'CTRADER valid is healthy', () => assert.equal(evaluateActiveAutoLiveMonitor(validCTrader).healthy, true));
 add(2, 'FIVE_PAISA valid is healthy', () => assert.equal(evaluateActiveAutoLiveMonitor(validFivePaisa).healthy, true));
 
-// Test blocker failure
+// Blocker failures (Critical)
 add(3, 'CTRADER connected failure blocks', () => {
     const res = evaluateActiveAutoLiveMonitor({...validCTrader, connected: false});
     assert.equal(res.healthy, false);
     assert.ok(res.criticalFailures.includes('cTraderConnected'));
 });
-
 add(4, 'FIVE_PAISA connected failure blocks', () => {
     const res = evaluateActiveAutoLiveMonitor({...validFivePaisa, connected: false});
     assert.equal(res.healthy, false);
     assert.ok(res.criticalFailures.includes('fivePaisaConnected'));
 });
+add(5, 'CTRADER trading permission failure blocks', () => {
+    const res = evaluateActiveAutoLiveMonitor({...validCTrader, tradingPermission: false});
+    assert.equal(res.healthy, false);
+    assert.ok(res.criticalFailures.includes('cTraderTradingPermission'));
+});
+add(6, 'FIVE_PAISA trading permission failure blocks', () => {
+    const res = evaluateActiveAutoLiveMonitor({...validFivePaisa, tradingPermission: false});
+    assert.equal(res.healthy, false);
+    assert.ok(res.criticalFailures.includes('fivePaisaTradingPermission'));
+});
 
-// Test non-critical failure (degradation)
-add(5, 'CTRADER accountId failure degrades', () => {
+// Non-critical failures (Degradation)
+add(7, 'CTRADER accountId failure degrades', () => {
     const res = evaluateActiveAutoLiveMonitor({...validCTrader, accountIdPresent: false});
+    assert.equal(res.status, 'DEGRADED');
+    assert.deepEqual(res.criticalFailures, []);
+});
+add(8, 'FIVE_PAISA balance failure degrades', () => {
+    const res = evaluateActiveAutoLiveMonitor({...validFivePaisa, balanceValid: false});
     assert.equal(res.status, 'DEGRADED');
     assert.deepEqual(res.criticalFailures, []);
 });

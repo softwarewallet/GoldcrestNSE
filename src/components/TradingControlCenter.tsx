@@ -2305,6 +2305,10 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
               {autoLiveMonitor && (
                 <div className="bg-slate-900/70 p-2.5 rounded border border-slate-800 space-y-2">
                   <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Broker</span>
+                    <strong className="text-slate-200">{autoLiveMonitor.brokerType || 'UNKNOWN'}</strong>
+                  </div>
+                  <div className="flex items-center justify-between">
                     <span className="text-slate-400">Status</span>
                     <strong className={
                       autoLiveMonitor.healthy
@@ -2316,6 +2320,16 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
                       {autoLiveMonitor.status || 'UNKNOWN'}
                     </strong>
                   </div>
+                  {autoLiveMonitor.brokerType === 'CTRADER' && autoLiveMonitor.cTrader && (
+                    <div className="text-[10px] text-slate-500">
+                      Connected: {autoLiveMonitor.cTrader.connected ? 'YES' : 'NO'}
+                    </div>
+                  )}
+                  {autoLiveMonitor.brokerType === 'FIVE_PAISA' && autoLiveMonitor.fivePaisa && (
+                    <div className="text-[10px] text-slate-500">
+                      Connected: {autoLiveMonitor.fivePaisa.connected ? 'YES' : 'NO'}
+                    </div>
+                  )}
                   {Array.isArray(autoLiveMonitor.failures) && autoLiveMonitor.failures.length > 0 && (
                     <div className="text-[10px] text-rose-300">
                       Issues: {autoLiveMonitor.failures.join(', ')}
