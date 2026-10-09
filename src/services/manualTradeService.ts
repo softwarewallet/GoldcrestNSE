@@ -8,6 +8,7 @@ import { getSystemConfig } from './configService';
 import { claimExecutionIntent, completeExecutionIntent, failExecutionIntent } from './executionIntentService';
 import type { BrokerType, OrderRequest, NormalizedOrder } from '../brokers/types';
 import { BrokerError } from '../brokers/errors';
+import { FXRateProvider } from '../accounting/fxRateProvider';
 
 export const MANUAL_TRADE_SMALL_BUDGET_INR = 20.00;
 export const MANUAL_TRADE_AUTHORIZATION_TTL_MS = 2 * 60 * 1000; // 2 minutes
@@ -116,6 +117,183 @@ export function calculateEstimatedCharges(market: string, side: 'BUY' | 'SELL', 
     gst,
     stampDuty,
     totalCharges
+  };
+}
+
+export interface TradeOutlayResult {
+  nativeCurrency: string;
+  nativeTradeValue: number;
+  nativeCharges: number;
+  nativeTotalOutlay: number;
+  fxConversionRate: number;
+  fxRateStatus: string;
+  fxRetrievedAt?: number;
+  outlayInr: number;
+  chargesInr: number;
+  chargesBreakdown: EstimatedChargesBreakdown;
+  error?: string;
+}
+
+/**
+ * Calculates trade outlay and charges in INR using explicit currency conversion.
+ * Strict fail-closed rules:
+ * - Indian trades are denominated in INR directly.
+ * - Forex trades in USD are converted using a fresh, valid FX conversion rate.
+ * - Stale, invalid, missing rates or unsupported currencies fail closed immediately.
+ * - Never directly compares USD with the ₹20 budget.
+ */
+export function calculateTradeOutlayInr(params: {
+  broker: BrokerType;
+  market: string;
+  symbol: string;
+  side: 'BUY' | 'SELL';
+  quantity: number;
+  price: number;
+  quoteCurrency?: string;
+}): TradeOutlayResult {
+  const { broker, market, symbol, side, quantity, price, quoteCurrency } = params;
+
+  if (broker === 'FIVE_PAISA' || market.startsWith('INDIAN')) {
+    const rawOrderValue = Number((quantity * price).toFixed(2));
+    const chargesBreakdown = calculateEstimatedCharges(market, side, rawOrderValue);
+    const totalCharges = chargesBreakdown.totalCharges;
+    const totalOutlayInr = Number((rawOrderValue + totalCharges).toFixed(2));
+
+    return {
+      nativeCurrency: 'INR',
+      nativeTradeValue: rawOrderValue,
+      nativeCharges: totalCharges,
+      nativeTotalOutlay: totalOutlayInr,
+      fxConversionRate: 1.0,
+      fxRateStatus: 'IDENTITY',
+      outlayInr: totalOutlayInr,
+      chargesInr: totalCharges,
+      chargesBreakdown
+    };
+  }
+
+  // Forex / cTrader market
+  const nativeCurrency = String(quoteCurrency || symbol.split('/')[1] || 'USD').toUpperCase().trim();
+  const rawOrderValue = Number((quantity * price).toFixed(4));
+  const chargesBreakdown = calculateEstimatedCharges('FOREX', side, rawOrderValue);
+  const totalCharges = chargesBreakdown.totalCharges;
+  const nativeTotalOutlay = Number((rawOrderValue + totalCharges).toFixed(4));
+
+  if (nativeCurrency !== 'USD' && nativeCurrency !== 'INR') {
+    return {
+      nativeCurrency,
+      nativeTradeValue: rawOrderValue,
+      nativeCharges: totalCharges,
+      nativeTotalOutlay,
+      fxConversionRate: 0,
+      fxRateStatus: 'UNSUPPORTED',
+      outlayInr: 0,
+      chargesInr: 0,
+      chargesBreakdown,
+      error: `UNSUPPORTED_BUDGET_CURRENCY: Native currency '${nativeCurrency}' does not have a supported FX conversion into INR. Small Trade Budget policy requires an explicit INR conversion.`
+    };
+  }
+
+  if (nativeCurrency === 'INR') {
+    return {
+      nativeCurrency: 'INR',
+      nativeTradeValue: rawOrderValue,
+      nativeCharges: totalCharges,
+      nativeTotalOutlay,
+      fxConversionRate: 1.0,
+      fxRateStatus: 'IDENTITY',
+      outlayInr: nativeTotalOutlay,
+      chargesInr: totalCharges,
+      chargesBreakdown
+    };
+  }
+
+  // Native currency is USD -> convert to INR via FXRateProvider
+  const provider = FXRateProvider.getInstance();
+  const fxQuery = provider.getRate('USD', 'INR', Date.now(), 'TRADE_TIME_FX', 'TRADE_TIME');
+
+  if (
+    fxQuery.status !== 'AVAILABLE' ||
+    !fxQuery.rate ||
+    !Number.isFinite(fxQuery.rate) ||
+    fxQuery.rate <= 0
+  ) {
+    return {
+      nativeCurrency: 'USD',
+      nativeTradeValue: rawOrderValue,
+      nativeCharges: totalCharges,
+      nativeTotalOutlay,
+      fxConversionRate: 0,
+      fxRateStatus: fxQuery.rateStatus || 'UNAVAILABLE',
+      outlayInr: 0,
+      chargesInr: 0,
+      chargesBreakdown,
+      error: `MISSING_FX_CONVERSION_RATE: Reliable USD/INR conversion rate is unavailable: ${fxQuery.error || 'Rate missing'}.`
+    };
+  }
+
+  if (fxQuery.rateStatus === 'INVALID') {
+    return {
+      nativeCurrency: 'USD',
+      nativeTradeValue: rawOrderValue,
+      nativeCharges: totalCharges,
+      nativeTotalOutlay,
+      fxConversionRate: fxQuery.rate,
+      fxRateStatus: 'INVALID',
+      outlayInr: 0,
+      chargesInr: 0,
+      chargesBreakdown,
+      error: `INVALID_FX_RATE: USD/INR conversion rate is marked INVALID.`
+    };
+  }
+
+  if (fxQuery.rateStatus === 'STALE') {
+    return {
+      nativeCurrency: 'USD',
+      nativeTradeValue: rawOrderValue,
+      nativeCharges: totalCharges,
+      nativeTotalOutlay,
+      fxConversionRate: fxQuery.rate,
+      fxRateStatus: 'STALE',
+      outlayInr: 0,
+      chargesInr: 0,
+      chargesBreakdown,
+      error: `STALE_FX_RATE: USD/INR conversion rate is marked STALE.`
+    };
+  }
+
+  // Maximum freshness age: 5 minutes (300,000 ms)
+  const MAX_FX_AGE_MS = 5 * 60 * 1000;
+  if (fxQuery.retrievedAt && Date.now() - fxQuery.retrievedAt > MAX_FX_AGE_MS) {
+    return {
+      nativeCurrency: 'USD',
+      nativeTradeValue: rawOrderValue,
+      nativeCharges: totalCharges,
+      nativeTotalOutlay,
+      fxConversionRate: fxQuery.rate,
+      fxRateStatus: 'STALE',
+      outlayInr: 0,
+      chargesInr: 0,
+      chargesBreakdown,
+      error: `STALE_FX_RATE: USD/INR conversion rate retrieved at ${new Date(fxQuery.retrievedAt).toISOString()} exceeds maximum 5-minute freshness age.`
+    };
+  }
+
+  const rate = fxQuery.rate;
+  const outlayInr = Number((nativeTotalOutlay * rate).toFixed(2));
+  const chargesInr = Number((totalCharges * rate).toFixed(2));
+
+  return {
+    nativeCurrency: 'USD',
+    nativeTradeValue: rawOrderValue,
+    nativeCharges: totalCharges,
+    nativeTotalOutlay,
+    fxConversionRate: rate,
+    fxRateStatus: fxQuery.rateStatus,
+    fxRetrievedAt: fxQuery.retrievedAt,
+    outlayInr,
+    chargesInr,
+    chargesBreakdown
   };
 }
 
@@ -288,51 +466,76 @@ export class ManualTradeService {
       if (Array.isArray(adapter.remoteScripMasterRows) && adapter.remoteScripMasterRows.length > 0) {
         for (const row of adapter.remoteScripMasterRows) {
           if (!search || String(row.Name || row.Symbol || '').toUpperCase().includes(search)) {
-            rows.push({
-              symbol: String(row.Symbol || row.Name || '').toUpperCase().trim(),
-              name: String(row.Name || row.Symbol || '').trim(),
-              exchange: String(row.Exch || 'N'),
-              exchangeType: String(row.ExchType || 'D'),
-              segment: row.ExchType === 'C' ? 'EQUITY' : 'DERIVATIVES',
-              scripCode: row.ScripCode,
-              lotSize: Number(row.LotSize || 1),
-              tickSize: Number(row.TickSize || 0.05),
-              digits: 2
-            });
-            if (rows.length >= 50) break;
+            const scripCode = row.ScripCode;
+            const lotSize = Number(row.LotSize || 1);
+            if (scripCode && Number(scripCode) > 0 && lotSize > 0) {
+              rows.push({
+                symbol: String(row.Symbol || row.Name || '').toUpperCase().trim(),
+                name: String(row.Name || row.Symbol || '').trim(),
+                exchange: String(row.Exch || 'N'),
+                exchangeType: String(row.ExchType || 'D'),
+                segment: row.ExchType === 'C' ? 'EQUITY' : 'DERIVATIVES',
+                scripCode,
+                lotSize,
+                tickSize: Number(row.TickSize || 0.05),
+                digits: 2
+              });
+              if (rows.length >= 50) break;
+            }
           }
         }
       }
 
-      // If empty or test adapter, include standard curated F&O and equity underlyings
+      // If remote scrip master is empty, allow isolated test environment mock scrip master population or fail closed in production
       if (rows.length === 0) {
-        const standards = [
-          { symbol: 'NIFTY 24000 CE', name: 'NIFTY 50 24000 CE', exchange: 'N', exchangeType: 'D', segment: 'DERIVATIVES', scripCode: '45001', lotSize: 25, tickSize: 0.05, digits: 2 },
-          { symbol: 'NIFTY 24000 PE', name: 'NIFTY 50 24000 PE', exchange: 'N', exchangeType: 'D', segment: 'DERIVATIVES', scripCode: '45002', lotSize: 25, tickSize: 0.05, digits: 2 },
-          { symbol: 'NIFTY 24500 CE', name: 'NIFTY 50 24500 CE', exchange: 'N', exchangeType: 'D', segment: 'DERIVATIVES', scripCode: '45003', lotSize: 25, tickSize: 0.05, digits: 2 },
-          { symbol: 'NIFTY 24500 PE', name: 'NIFTY 50 24500 PE', exchange: 'N', exchangeType: 'D', segment: 'DERIVATIVES', scripCode: '45004', lotSize: 25, tickSize: 0.05, digits: 2 },
-          { symbol: 'BANKNIFTY 52000 CE', name: 'NIFTY BANK 52000 CE', exchange: 'N', exchangeType: 'D', segment: 'DERIVATIVES', scripCode: '45101', lotSize: 15, tickSize: 0.05, digits: 2 },
-          { symbol: 'BANKNIFTY 52000 PE', name: 'NIFTY BANK 52000 PE', exchange: 'N', exchangeType: 'D', segment: 'DERIVATIVES', scripCode: '45102', lotSize: 15, tickSize: 0.05, digits: 2 },
-          { symbol: 'FINNIFTY 23000 CE', name: 'NIFTY FIN 23000 CE', exchange: 'N', exchangeType: 'D', segment: 'DERIVATIVES', scripCode: '45201', lotSize: 25, tickSize: 0.05, digits: 2 },
-          { symbol: 'MIDCPNIFTY 12000 CE', name: 'NIFTY MIDCAP 12000 CE', exchange: 'N', exchangeType: 'D', segment: 'DERIVATIVES', scripCode: '45301', lotSize: 50, tickSize: 0.05, digits: 2 },
-          { symbol: 'SENSEX 80000 CE', name: 'BSE SENSEX 80000 CE', exchange: 'B', exchangeType: 'D', segment: 'DERIVATIVES', scripCode: '45401', lotSize: 10, tickSize: 0.05, digits: 2 },
-          { symbol: 'RELIANCE', name: 'RELIANCE INDUSTRIES LTD', exchange: 'N', exchangeType: 'C', segment: 'EQUITY', scripCode: '2885', lotSize: 1, tickSize: 0.05, digits: 2 },
-          { symbol: 'TCS', name: 'TATA CONSULTANCY SERVICES', exchange: 'N', exchangeType: 'C', segment: 'EQUITY', scripCode: '11536', lotSize: 1, tickSize: 0.05, digits: 2 },
-          { symbol: 'INFY', name: 'INFOSYS LTD', exchange: 'N', exchangeType: 'C', segment: 'EQUITY', scripCode: '1594', lotSize: 1, tickSize: 0.05, digits: 2 },
-          { symbol: 'HDFCBANK', name: 'HDFC BANK LTD', exchange: 'N', exchangeType: 'C', segment: 'EQUITY', scripCode: '1333', lotSize: 1, tickSize: 0.05, digits: 2 },
-          { symbol: 'SBIN', name: 'STATE BANK OF INDIA', exchange: 'N', exchangeType: 'C', segment: 'EQUITY', scripCode: '3045', lotSize: 1, tickSize: 0.05, digits: 2 }
-        ];
-        return standards.filter(s => !search || s.symbol.includes(search) || s.name.includes(search));
+        const isTestEnv = process.env.NODE_ENV === 'test' || Boolean(process.env.GOLDCREST_DB_FILE?.includes('test_'));
+        if (isTestEnv) {
+          const standards = [
+            { symbol: 'NIFTY 24000 CE', name: 'NIFTY 50 24000 CE', exchange: 'N', exchangeType: 'D', segment: 'DERIVATIVES', scripCode: '45001', lotSize: 25, tickSize: 0.05, digits: 2 },
+            { symbol: 'NIFTY 24000 PE', name: 'NIFTY 50 24000 PE', exchange: 'N', exchangeType: 'D', segment: 'DERIVATIVES', scripCode: '45002', lotSize: 25, tickSize: 0.05, digits: 2 },
+            { symbol: 'NIFTY 24500 CE', name: 'NIFTY 50 24500 CE', exchange: 'N', exchangeType: 'D', segment: 'DERIVATIVES', scripCode: '45003', lotSize: 25, tickSize: 0.05, digits: 2 },
+            { symbol: 'NIFTY 24500 PE', name: 'NIFTY 50 24500 PE', exchange: 'N', exchangeType: 'D', segment: 'DERIVATIVES', scripCode: '45004', lotSize: 25, tickSize: 0.05, digits: 2 },
+            { symbol: 'BANKNIFTY 52000 CE', name: 'NIFTY BANK 52000 CE', exchange: 'N', exchangeType: 'D', segment: 'DERIVATIVES', scripCode: '45101', lotSize: 15, tickSize: 0.05, digits: 2 },
+            { symbol: 'BANKNIFTY 52000 PE', name: 'NIFTY BANK 52000 PE', exchange: 'N', exchangeType: 'D', segment: 'DERIVATIVES', scripCode: '45102', lotSize: 15, tickSize: 0.05, digits: 2 },
+            { symbol: 'RELIANCE', name: 'RELIANCE INDUSTRIES LTD', exchange: 'N', exchangeType: 'C', segment: 'EQUITY', scripCode: '2885', lotSize: 1, tickSize: 0.05, digits: 2 }
+          ];
+          return standards.filter(s => !search || s.symbol.includes(search) || s.name.includes(search));
+        }
       }
 
       return rows;
     } else {
-      // cTrader forex pairs
-      return [
-        { symbol: 'EUR/USD', name: 'Euro / US Dollar', exchange: 'CTRADER', exchangeType: 'FX', segment: 'FOREX', scripCode: '1', lotSize: 1, tickSize: 0.00001, digits: 5 },
-        { symbol: 'GBP/USD', name: 'British Pound / US Dollar', exchange: 'CTRADER', exchangeType: 'FX', segment: 'FOREX', scripCode: '2', lotSize: 1, tickSize: 0.00001, digits: 5 },
-        { symbol: 'USD/JPY', name: 'US Dollar / Japanese Yen', exchange: 'CTRADER', exchangeType: 'FX', segment: 'FOREX', scripCode: '3', lotSize: 1, tickSize: 0.001, digits: 3 }
-      ];
+      // cTrader forex pairs from authoritative broker adapter
+      const search = String(query || '').trim().toUpperCase();
+      const rows: any[] = [];
+      try {
+        if (typeof adapter.getInstruments === 'function') {
+          const insts = await adapter.getInstruments();
+          if (Array.isArray(insts)) {
+            for (const inst of insts) {
+              if (!search || inst.symbol.toUpperCase().includes(search)) {
+                if (inst.brokerInstrumentId && inst.minQuantity && inst.minQuantity > 0) {
+                  rows.push({
+                    symbol: inst.symbol,
+                    name: inst.symbol,
+                    exchange: 'CTRADER',
+                    exchangeType: 'FX',
+                    segment: 'FOREX',
+                    scripCode: inst.brokerInstrumentId,
+                    lotSize: inst.minQuantity,
+                    tickSize: Math.pow(10, -(inst.digits || 5)),
+                    digits: inst.digits || 5
+                  });
+                  if (rows.length >= 50) break;
+                }
+              }
+            }
+          }
+        }
+      } catch {
+        // fail-closed with empty list if broker instrument query fails
+      }
+      return rows;
     }
   }
 
@@ -481,20 +684,36 @@ export class ManualTradeService {
       }
     }
 
-    // 8. Cost & Small Trade Budget (₹20) Enforcement
-    const rawOrderValue = Number((quantity * price).toFixed(2));
-    const chargesBreakdown = calculateEstimatedCharges(market, input.side, rawOrderValue);
-    const estimatedCharges = chargesBreakdown.totalCharges;
-    const totalEstimatedOutlay = Number((rawOrderValue + estimatedCharges).toFixed(2));
+    // 8. Cost & Small Trade Budget (₹20) Enforcement with Currency Safety
+    const quoteCurrency = resolvedInst?.quoteCurrency || (selectedBroker === 'CTRADER' ? symbol.split('/')[1] : 'INR');
+    const outlayResult = calculateTradeOutlayInr({
+      broker: selectedBroker,
+      market,
+      symbol,
+      side: input.side,
+      quantity,
+      price,
+      quoteCurrency
+    });
+
+    if (outlayResult.error) {
+      rejectionReasons.push(outlayResult.error);
+    }
+
+    const rawOrderValue = outlayResult.nativeTradeValue;
+    const estimatedCharges = outlayResult.nativeCharges;
+    const chargesBreakdown = outlayResult.chargesBreakdown;
+    const totalEstimatedOutlay = outlayResult.nativeTotalOutlay;
+    const totalOutlayInr = outlayResult.outlayInr;
 
     const smallTradeBudget = MANUAL_TRADE_SMALL_BUDGET_INR;
-    const isWithinBudget = totalEstimatedOutlay <= smallTradeBudget + 1e-6;
+    const isWithinBudget = totalOutlayInr <= smallTradeBudget + 1e-6;
 
-    if (!isWithinBudget) {
+    if (!isWithinBudget && !outlayResult.error) {
       const lotCount = lotSize > 0 ? quantity / lotSize : 1;
       rejectionReasons.push(
-        `SMALL_TRADE_BUDGET_EXCEEDED: Estimated trade outlay of ₹${totalEstimatedOutlay.toFixed(2)} (Trade Value: ₹${rawOrderValue.toFixed(2)} + Charges: ₹${estimatedCharges.toFixed(2)}) exceeds the ₹${smallTradeBudget.toFixed(2)} Small Trade Budget limit. ` +
-        `Contract requires ${lotCount} lot(s) (${quantity} qty) at price ₹${price.toFixed(2)}.`
+        `SMALL_TRADE_BUDGET_EXCEEDED: Estimated trade outlay of ₹${totalOutlayInr.toFixed(2)} (Native Outlay: ${outlayResult.nativeCurrency} ${totalEstimatedOutlay.toFixed(4)} @ FX Rate ${outlayResult.fxConversionRate}) exceeds the ₹${smallTradeBudget.toFixed(2)} Small Trade Budget limit. ` +
+        `Contract requires ${lotCount} lot(s) (${quantity} qty) at price ${price.toFixed(4)}.`
       );
     }
 

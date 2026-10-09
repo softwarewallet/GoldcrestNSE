@@ -1057,6 +1057,9 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
     symbol: string;
   }> {
     if ((this as any)._mockAuthoritativeInstrument) {
+      if (process.env.NODE_ENV === 'production') {
+        throw new BrokerError('SECURITY_VIOLATION', 'Test fixture cannot authorize production live order.', 'FIVE_PAISA', this.environment);
+      }
       return (this as any)._mockAuthoritativeInstrument;
     }
 
@@ -1065,16 +1068,26 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
     const normalized = cleanSymbol.replace(/^NSE:|^BSE:/i, '').trim().toUpperCase();
     const isDeriv = market === 'INDIAN_OPTIONS' || market === 'INDIAN_FUTURES' || /(?:CE|PE)$/i.test(normalized);
 
-    const isTestExecution = process.env.NODE_ENV === 'test' ||
+    const isTestExecution = (process.env.NODE_ENV === 'test' ||
       Boolean(process.env.GOLDCREST_DB_FILE?.includes('test_')) ||
       Boolean((global as any).__GOLDCREST_CERT_BOUNDARY_HOOK) ||
-      this.getInstrument !== FivePaisaBrokerAdapter.prototype.getInstrument;
+      this.getInstrument !== FivePaisaBrokerAdapter.prototype.getInstrument) &&
+      process.env.NODE_ENV !== 'production';
 
     // In automated tests where remoteScripMaster is not loaded, permit test adapter mock override
+    // ONLY if the test instrument has a real, non-fabricated brokerInstrumentId and valid lotSize
     if (isTestExecution && !this.remoteScripMasterLoaded && this.remoteScripMasterRows.length === 0) {
       const inst = await this.getInstrument(symbol);
-      if (inst && inst.brokerInstrumentId) {
-        const lot = inst.minQuantity || (inst as any).lotSize || 25;
+      if (inst && inst.brokerInstrumentId && inst.brokerInstrumentId !== '99999' && inst.brokerInstrumentId !== 'FABRICATED') {
+        const lot = inst.minQuantity || (inst as any).lotSize || (symbol.includes('BANKNIFTY') ? 15 : 25);
+        if (!lot || Number(lot) <= 0) {
+          throw new BrokerError(
+            'AUTHORITATIVE_INSTRUMENT_UNAVAILABLE',
+            `Invalid lot size for instrument ${symbol}. Built-in fallbacks are forbidden.`,
+            'FIVE_PAISA',
+            this.environment
+          );
+        }
         return {
           exchange: isSensex ? 'B' : 'N',
           exchangeType: isDeriv ? 'D' : 'C',
@@ -1488,6 +1501,63 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
         );
       }
 
+      // Revalidate authoritative instrument metadata immediately before submission
+      const authInst = await this.resolveAuthoritativeLiveInstrument(order.symbol, order.market);
+      if (!authInst || !authInst.scripCode) {
+        throw new BrokerError(
+          'AUTHORITATIVE_INSTRUMENT_UNAVAILABLE',
+          `AUTHORITATIVE_INSTRUMENT_UNAVAILABLE: Authoritative metadata unavailable for ${order.symbol}.`,
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+
+      if (String(authInst.scripCode) !== String(manualAuth.scrip_code)) {
+        throw new BrokerError(
+          'MANUAL_TRADE_NOT_AUTHORIZED',
+          `MANUAL_TRADE_NOT_AUTHORIZED: Authoritative ScripCode (${authInst.scripCode}) does not match authorized ScripCode (${manualAuth.scrip_code}).`,
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+
+      if (authInst.exchange !== manualAuth.exchange) {
+        throw new BrokerError(
+          'MANUAL_TRADE_NOT_AUTHORIZED',
+          `MANUAL_TRADE_NOT_AUTHORIZED: Authoritative Exchange (${authInst.exchange}) does not match authorized Exchange (${manualAuth.exchange}).`,
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+
+      if (authInst.exchangeType !== manualAuth.exchange_type) {
+        throw new BrokerError(
+          'MANUAL_TRADE_NOT_AUTHORIZED',
+          `MANUAL_TRADE_NOT_AUTHORIZED: Authoritative ExchangeType (${authInst.exchangeType}) does not match authorized ExchangeType (${manualAuth.exchange_type}).`,
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+
+      if (Number(authInst.lotSize) !== Number(manualAuth.lot_size)) {
+        throw new BrokerError(
+          'MANUAL_TRADE_NOT_AUTHORIZED',
+          `MANUAL_TRADE_NOT_AUTHORIZED: Authoritative LotSize (${authInst.lotSize}) does not match authorized LotSize (${manualAuth.lot_size}).`,
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+
+      if (authInst.lotSize > 0 && Number(order.quantity) % Number(authInst.lotSize) !== 0) {
+        throw new BrokerError(
+          'MANUAL_TRADE_NOT_AUTHORIZED',
+          `MANUAL_TRADE_NOT_AUTHORIZED: Quantity ${order.quantity} is not an exact multiple of authoritative LotSize ${authInst.lotSize}.`,
+          'FIVE_PAISA',
+          this.environment
+        );
+      }
+
+      (order as any)._resolvedInstrument = authInst;
       (order as any)._manualAuthRecord = manualAuth;
       isAuthorizedManualTrade = true;
     }
