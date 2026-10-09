@@ -228,6 +228,8 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
   const [gateFeedback, setGateFeedback] = useState<string | null>(null);
   const [goLiveValidationBusy, setGoLiveValidationBusy] = useState<boolean>(false);
   const [goLiveValidation, setGoLiveValidation] = useState<any | null>(null);
+  const [autoLiveMonitor, setAutoLiveMonitor] = useState<any | null>(null);
+  const [autoLiveMonitorBusy, setAutoLiveMonitorBusy] = useState<boolean>(false);
   const [brokerSession, setBrokerSession] = useState<{ status: 'VERIFIED_ACTIVE' | 'VERIFIED_INACTIVE' | 'UNKNOWN' }>({ status: 'UNKNOWN' });
   const [brokerSessionBusy, setBrokerSessionBusy] = useState<boolean>(false);
   const [ctraderFunctionalValidationBusy, setCtraderFunctionalValidationBusy] = useState<boolean>(false);
@@ -692,6 +694,28 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
       setGoLiveValidationBusy(false);
     }
   }, []);
+
+  const runAutoLiveMonitor = useCallback(async () => {
+    setAutoLiveMonitorBusy(true);
+    try {
+      const res = await fetch('/api/operations/active-auto-live-monitor', {
+        cache: 'no-store',
+        headers: { Accept: 'application/json' }
+      });
+      const data = await res.json().catch(() => ({}));
+      setAutoLiveMonitor(data);
+    } catch (err) {
+      console.warn('Auto Live monitor check failed:', err);
+    } finally {
+      setAutoLiveMonitorBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    runAutoLiveMonitor();
+    const interval = setInterval(runAutoLiveMonitor, 30000);
+    return () => clearInterval(interval);
+  }, [runAutoLiveMonitor]);
 
   const fetchBrokerSessionStatus = useCallback(async () => {
     setBrokerSessionBusy(true);
@@ -2269,44 +2293,36 @@ export const TradingControlCenter: React.FC<TradingControlCenterProps> = ({
                 <span className="text-slate-400">Active Auto Live Monitor:</span>
                 <button
                   type="button"
-                  onClick={fetchBrokerSessionStatus}
-                  disabled={brokerSessionBusy}
+                  onClick={runAutoLiveMonitor}
+                  disabled={autoLiveMonitorBusy}
                   className="px-2.5 py-1 rounded border border-violet-700 bg-violet-950/70 text-violet-300 hover:bg-violet-900/80 text-[10px] font-bold disabled:opacity-50"
-                  title="Check the current broker session health"
+                  title="Check the current active monitor status"
                 >
-                  {brokerSessionBusy ? 'CHECKING...' : 'CHECK SESSION STATUS'}
+                  {autoLiveMonitorBusy ? 'CHECKING...' : 'REFRESH MONITOR'}
                 </button>
               </div>
 
-              {/*
-              {activeAutoLiveMonitor && (
+              {autoLiveMonitor && (
                 <div className="bg-slate-900/70 p-2.5 rounded border border-slate-800 space-y-2">
                   <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Active Session Status</span>
+                    <span className="text-slate-400">Status</span>
                     <strong className={
-                      activeAutoLiveMonitor.status === 'HEALTHY'
+                      autoLiveMonitor.healthy
                         ? 'text-emerald-400'
-                        : activeAutoLiveMonitor.status === 'DEGRADED'
+                        : autoLiveMonitor.status === 'DEGRADED'
                           ? 'text-amber-400'
                           : 'text-rose-400'
                     }>
-                      {activeAutoLiveMonitor.status || 'UNKNOWN'}
+                      {autoLiveMonitor.status || 'UNKNOWN'}
                     </strong>
                   </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Execution Gate</span>
-                    <strong className={activeAutoLiveMonitor.executionGate?.unlocked ? 'text-emerald-400' : 'text-amber-400'}>
-                      {activeAutoLiveMonitor.executionGate?.unlocked ? 'UNLOCKED' : 'LOCKED'}
-                    </strong>
-                  </div>
-                  {Array.isArray(activeAutoLiveMonitor.failures) && activeAutoLiveMonitor.failures.length > 0 && (
+                  {Array.isArray(autoLiveMonitor.failures) && autoLiveMonitor.failures.length > 0 && (
                     <div className="text-[10px] text-rose-300">
-                      Issues: {activeAutoLiveMonitor.failures.join(', ')}
+                      Issues: {autoLiveMonitor.failures.join(', ')}
                     </div>
                   )}
                 </div>
               )}
-              */}
 
               <div className="flex items-center justify-between gap-2 bg-slate-900/80 p-2 rounded border border-slate-800">
                 <span className="text-slate-400">Production Go-Live Validation:</span>

@@ -867,7 +867,9 @@ app.get('/api/operations/active-auto-live-monitor', operatorAuthRequired, async 
       environment: process.env.NODE_ENV || 'development'
     });
 
-    const adapter = brokerRegistry.getAdapter('CTRADER', 'LIVE');
+    const selectedBroker = brokerRegistry.getSelectedBroker();
+    const adapter = brokerRegistry.getAdapter(selectedBroker, 'LIVE');
+    
     let account = null;
     let connection = null;
     try {
@@ -881,20 +883,22 @@ app.get('/api/operations/active-auto-live-monitor', operatorAuthRequired, async 
     const permissions = Array.isArray(account?.permissions) ? account.permissions : [];
     const accountIsLive = account?.accountType === 'LIVE' && account?.isLiveAccount !== false;
     const accountIdPresent = Boolean(String(account?.accountId || '').trim());
-    const currencyPresent = Boolean(String(account?.currency || '').trim());
     const balanceValid = typeof account?.balance === 'number' && Number.isFinite(account.balance) && account.balance > 0;
-    const equityValid = typeof account?.equity === 'number' && Number.isFinite(account.equity) && account.equity > 0;
-    const tradingPermission = permissions.includes('TRADING')
-      || permissions.includes('EQUITY')
-      || permissions.includes('DERIVATIVES')
-      || permissions.includes('NSE_FNO');
+    
+    let tradingPermission = false;
+    if (selectedBroker === 'FIVE_PAISA') {
+        tradingPermission = permissions.includes('TRADING') || permissions.includes('EQUITY') || permissions.includes('DERIVATIVES') || permissions.includes('NSE_FNO');
+    } else {
+        tradingPermission = permissions.includes('TRADING') || permissions.includes('EQUITY') || permissions.includes('DERIVATIVES');
+    }
 
     const snapshots = await getAccountBalanceSnapshots({
-      broker: 'CTRADER',
+      broker: selectedBroker,
       limit: 1
     });
+    
     const accountConsistency = evaluateAccountStateConsistency(
-      'CTRADER',
+      selectedBroker,
       account,
       snapshots[0] || null
     );
@@ -909,8 +913,8 @@ app.get('/api/operations/active-auto-live-monitor', operatorAuthRequired, async 
     );
     const executionGateUnlocked = LIVE_AUTO_EXECUTION_ALLOWED === true;
 
-    const monitor = evaluateActiveAutoLiveMonitor({
-        brokerType: 'FIVE_PAISA',
+    let monitorInput: any = {
+        brokerType: selectedBroker,
         configurationIntegrityOk: configIntegrity.ok,
         tradingModeLiveOnly: config.tradingMode === 'LIVE_ONLY',
         databasePersistenceHealthy: !observability.databasePersistence.lastPersistenceError,
@@ -926,7 +930,20 @@ app.get('/api/operations/active-auto-live-monitor', operatorAuthRequired, async 
         autoTradingStateOperational,
         noUnresolvedExecutionIntents,
         accountStateConsistent: accountConsistency.consistent
-    });
+    };
+
+    if (selectedBroker === 'CTRADER') {
+        const currencyPresent = Boolean(String(account?.currency || '').trim());
+        const equityValid = typeof account?.equity === 'number' && Number.isFinite(account.equity) && account.equity > 0;
+        monitorInput = {
+            ...monitorInput,
+            currencyPresent: currencyPresent,
+            equityValid: equityValid,
+            apiModeLive: getCTraderApiMode() === 'LIVE'
+        };
+    }
+
+    const monitor = evaluateActiveAutoLiveMonitor(monitorInput);
 
     liveRuntimeLog(
       monitor.healthy ? 'SYSTEM' : monitor.status === 'BLOCKED' ? 'ERROR' : 'WARN',
@@ -2960,19 +2977,10 @@ async function startServer() {
     // refreshes so today's high/low/close stays current without flooding
     // cTrader historical endpoints.
     void databaseInitPromise
-      .then(() => {
-        // startLiveTradeResearchOutcomeTracker();
-        // startCurrentPairPredictionCollectionScheduler();
-      })
-      // .then(() => syncMarketHistory())
-      // .then(() => {
-      //   startMarketHistoryScheduler();
-      // })
       .catch((error) => {
         liveRuntimeLog('ERROR', 'MARKET_HISTORY_INITIAL_SYNC_FAILED', {
           error: error?.message || String(error)
         });
-        startMarketHistoryScheduler();
       });
 
     reconciliationTimer = setInterval(() => void captureLiveBrokerReconciliation(), 5 * 60_000);
