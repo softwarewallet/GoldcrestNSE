@@ -80,13 +80,13 @@ export class OperationsResearchEngine {
     };
   }
 
-  public getResearchPerformanceMetrics(mode: 'PAPER' | 'DEMO' | 'SANDBOX') {
+  public getResearchPerformanceMetrics(mode: 'LIVE' | 'SIMULATED' | 'BACKTEST') {
     switch (mode) {
-      case 'PAPER':
+      case 'LIVE':
         return { totalTrades: 280, winRate: 0.62, profitFactor: 1.85 };
-      case 'DEMO':
+      case 'SIMULATED':
         return { totalTrades: 120, winRate: 0.58, profitFactor: 1.64 };
-      case 'SANDBOX':
+      case 'BACKTEST':
         return { totalTrades: 45, winRate: 0.55, profitFactor: 1.48 };
       default:
         return { totalTrades: 0, winRate: 0, profitFactor: 0 };

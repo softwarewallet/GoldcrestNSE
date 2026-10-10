@@ -43,8 +43,8 @@ type Summary = {
 
 const money = (v: number, currency = 'INR') =>
   Number.isFinite(v)
-    ? new Intl.NumberFormat(currency === 'INR' ? 'en-IN' : 'en-US', {
-        style: 'currency', currency, maximumFractionDigits: 0
+    ? (currency === 'INR' ? '₹' : '') + new Intl.NumberFormat(currency === 'INR' ? 'en-IN' : 'en-US', {
+        style: currency === 'INR' ? 'decimal' : 'currency', currency: currency === 'INR' ? undefined : currency, maximumFractionDigits: 0
       }).format(v)
     : '—';
 
