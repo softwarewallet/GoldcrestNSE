@@ -90,6 +90,7 @@ async function runTests() {
   );
 
   // TEST 7: FX Rate Types (TRADE_TIME, REPORT_TIME, PERIOD_END, REFERENCE)
+  provider.updateRate(86.50, 'RBI Live', 'TRADE_TIME', 'FRESH');
   const tradeTimeRecord = provider.buildConversionRecord('USD', 'INR', 'TRADE_TIME_FX', Date.now(), 100, 'TRADE_TIME');
   const periodEndRecord = provider.buildConversionRecord('USD', 'INR', 'PERIOD_END_FX', Date.now(), 100, 'PERIOD_END');
   assert(

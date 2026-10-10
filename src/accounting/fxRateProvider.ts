@@ -65,7 +65,8 @@ export class FXRateProvider {
     usdInrRate: number,
     source: string = 'RBI benchmark/reference',
     rateType: FXRateType = 'REFERENCE',
-    rateStatus: FXRateStatus = 'REFERENCE'
+    rateStatus: FXRateStatus = 'REFERENCE',
+    liveSourceStatus?: FXLiveSourceStatus
   ): boolean {
     if (!Number.isFinite(usdInrRate) || usdInrRate <= 0) {
       return false;
@@ -76,6 +77,7 @@ export class FXRateProvider {
     this.rateStatus = rateStatus;
     this.retrievedTs = Date.now();
     this.effectiveTs = Date.now();
+    this.liveSourceStatus = liveSourceStatus || (rateType === 'TRADE_TIME' ? 'CONNECTED' : (this.liveSourceStatus || 'NOT_CONFIGURED'));
     return true;
   }
 
@@ -91,6 +93,30 @@ export class FXRateProvider {
     return this.liveSourceStatus;
   }
 
+  public setLiveSourceStatus(status: FXLiveSourceStatus): void {
+    this.liveSourceStatus = status;
+  }
+
+  public getRateType(): FXRateType {
+    return this.rateType;
+  }
+
+  public getRateStatus(): FXRateStatus {
+    return this.rateStatus;
+  }
+
+  public getRateSource(): string {
+    return this.rateSource;
+  }
+
+  public getEffectiveTs(): number {
+    return this.effectiveTs;
+  }
+
+  public getRetrievedTs(): number {
+    return this.retrievedTs;
+  }
+
   /**
    * Primary FX rate query method with fail-closed validation.
    */
@@ -101,7 +127,14 @@ export class FXRateProvider {
     methodology: FXConversionMethodology = 'REPORT_TIME_FX',
     requestedRateType?: FXRateType
   ): FXRateQueryResult {
-    const rateTypeToUse = requestedRateType || this.rateType;
+    // A caller must not be able to label a reference rate as TRADE_TIME merely by supplying a requested rate type
+    const isUnderlyingReference = this.rateType === 'REFERENCE' || this.rateStatus === 'REFERENCE';
+    let rateTypeToUse = requestedRateType || this.rateType;
+    if (isUnderlyingReference && requestedRateType === 'TRADE_TIME') {
+      rateTypeToUse = 'REFERENCE';
+    } else if (!isUnderlyingReference && requestedRateType) {
+      rateTypeToUse = requestedRateType;
+    }
 
     // Validate supported currencies
     const supportedCurrencies: CurrencyCode[] = ['USD', 'INR'];
@@ -225,7 +258,7 @@ export class FXRateProvider {
       effectiveAt: query.effectiveAt || Date.now(),
       retrievedAt: query.retrievedAt || Date.now(),
       source: query.source || this.rateSource,
-      rateType: query.rateType || this.rateType,
+      rateType: query.rateType,
       methodology,
       conversionVersion: this.conversionVersion,
       status: query.rateStatus

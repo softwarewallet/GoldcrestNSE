@@ -1138,6 +1138,69 @@ export abstract class CTraderBrokerAdapter extends BaseBrokerAdapter {
     return instruments.find(i => i.symbol.replace('/', '').toUpperCase() === normalized) || null;
   }
 
+  public setTestAuthoritativeInstrument(inst: any): void {
+    if (process.env.NODE_ENV === 'production') {
+      throw new BrokerError('SECURITY_VIOLATION', 'Test fixture cannot authorize production live order.', 'CTRADER', this.environment);
+    }
+    (this as any)._mockAuthoritativeInstrument = inst;
+  }
+
+  /**
+   * Resolves the authoritative remote broker instrument for LIVE order authorization and submission.
+   * Built-in fallback metadata must NEVER authorize or execute a live order.
+   */
+  public async resolveAuthoritativeLiveInstrument(
+    symbol: string,
+    market?: string
+  ): Promise<{
+    exchange: string;
+    exchangeType: string;
+    scripCode: number | string;
+    brokerInstrumentId: string;
+    lotSize: number;
+    symbol: string;
+    quoteCurrency?: string;
+  }> {
+    if ((this as any)._mockAuthoritativeInstrument) {
+      if (process.env.NODE_ENV === 'production') {
+        throw new BrokerError('SECURITY_VIOLATION', 'Test fixture cannot authorize production live order.', 'CTRADER', this.environment);
+      }
+      return (this as any)._mockAuthoritativeInstrument;
+    }
+
+    const inst = await this.getInstrument(symbol);
+    if (!inst || !inst.brokerInstrumentId || inst.brokerInstrumentId === 'FABRICATED' || inst.brokerInstrumentId === '99999') {
+      throw new BrokerError(
+        'AUTHORITATIVE_INSTRUMENT_UNAVAILABLE',
+        `AUTHORITATIVE_INSTRUMENT_UNAVAILABLE: Remote cTrader instrument metadata is unavailable for ${symbol}. Built-in fallbacks are strictly prohibited for live order authorization and execution.`,
+        'CTRADER',
+        this.environment
+      );
+    }
+
+    const lotSize = inst.minQuantity || 1;
+    if (!lotSize || Number(lotSize) <= 0) {
+      throw new BrokerError(
+        'AUTHORITATIVE_INSTRUMENT_UNAVAILABLE',
+        `AUTHORITATIVE_INSTRUMENT_UNAVAILABLE: Invalid lot size for cTrader instrument ${symbol}.`,
+        'CTRADER',
+        this.environment
+      );
+    }
+
+    const quoteCurrency = inst.symbol.includes('/') ? inst.symbol.split('/')[1] : 'USD';
+
+    return {
+      exchange: 'CTRADER',
+      exchangeType: 'FX',
+      scripCode: inst.brokerInstrumentId,
+      brokerInstrumentId: String(inst.brokerInstrumentId),
+      lotSize: Number(lotSize),
+      symbol: inst.symbol,
+      quoteCurrency
+    };
+  }
+
   /**
    * Guarded capability used exclusively by the autonomous execution engine.
    * The engine performs the shared live safety/readiness gates before calling

@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { manualTradeService, generateManualTradeFingerprint, MANUAL_TRADE_SMALL_BUDGET_INR, calculateTradeOutlayInr } from '../src/services/manualTradeService';
+import { manualTradeService, generateManualTradeFingerprint, MANUAL_TRADE_SMALL_BUDGET_INR, calculateTradeOutlayInr, registerTestFixtureInstruments } from '../src/services/manualTradeService';
 import { FXRateProvider } from '../src/accounting/fxRateProvider';
 import { brokerRegistry } from '../src/brokers/registry';
 import { killSwitch } from '../src/brokers/safety/KillSwitch';
@@ -40,12 +40,23 @@ async function runManualTradeCertificationTests() {
   console.log('================================================================');
 
   let passedTests = 0;
-  const totalTests = 18;
+  const totalTests = 22;
 
   try {
     await getDatabase();
 
     updateSystemConfig({ executionMode: 'LIVE_DRY_RUN' });
+
+    // Explicitly register isolated test fixture instruments
+    registerTestFixtureInstruments([
+      { symbol: 'NIFTY 24000 CE', name: 'NIFTY 50 24000 CE', exchange: 'N', exchangeType: 'D', segment: 'DERIVATIVES', scripCode: '45001', lotSize: 25, tickSize: 0.05, digits: 2 },
+      { symbol: 'NIFTY 24000 PE', name: 'NIFTY 50 24000 PE', exchange: 'N', exchangeType: 'D', segment: 'DERIVATIVES', scripCode: '45002', lotSize: 25, tickSize: 0.05, digits: 2 },
+      { symbol: 'NIFTY 24500 CE', name: 'NIFTY 50 24500 CE', exchange: 'N', exchangeType: 'D', segment: 'DERIVATIVES', scripCode: '45003', lotSize: 25, tickSize: 0.05, digits: 2 },
+      { symbol: 'NIFTY 24500 PE', name: 'NIFTY 50 24500 PE', exchange: 'N', exchangeType: 'D', segment: 'DERIVATIVES', scripCode: '45004', lotSize: 25, tickSize: 0.05, digits: 2 },
+      { symbol: 'BANKNIFTY 52000 CE', name: 'NIFTY BANK 52000 CE', exchange: 'N', exchangeType: 'D', segment: 'DERIVATIVES', scripCode: '45101', lotSize: 15, tickSize: 0.05, digits: 2 },
+      { symbol: 'BANKNIFTY 52000 PE', name: 'NIFTY BANK 52000 PE', exchange: 'N', exchangeType: 'D', segment: 'DERIVATIVES', scripCode: '45102', lotSize: 15, tickSize: 0.05, digits: 2 },
+      { symbol: 'RELIANCE', name: 'RELIANCE INDUSTRIES LTD', exchange: 'N', exchangeType: 'C', segment: 'EQUITY', scripCode: '2885', lotSize: 1, tickSize: 0.05, digits: 2 }
+    ]);
 
     // Configure test adapter with full LIVE account and scrip resolution
     const adapter = brokerRegistry.getAdapter('FIVE_PAISA', 'LIVE') as any;
@@ -507,6 +518,7 @@ async function runManualTradeCertificationTests() {
     // Test 18: Stale FX Rate Rejection
     // -------------------------------------------------------------
     console.log('[TEST 18] Stale FX Rate Rejection...');
+    fxProvider.updateRate(86.50, 'Live Feed', 'TRADE_TIME', 'STALE');
     fxProvider.invalidateRate('STALE');
     const staleFxResult = calculateTradeOutlayInr({
       broker: 'CTRADER',
@@ -522,6 +534,169 @@ async function runManualTradeCertificationTests() {
     }
     fxProvider.updateRate(86.50, 'RBI Trade', 'TRADE_TIME', 'FRESH'); // restore valid rate
     console.log('  ✓ [18] Stale FX rate cleanly rejected.');
+    passedTests++;
+
+    // -------------------------------------------------------------
+    // Test 19: Missing Authoritative Metadata Blocks Submission
+    // -------------------------------------------------------------
+    console.log('[TEST 19] Missing Authoritative Metadata Blocks Submission...');
+    const originalResolver = adapter.resolveAuthoritativeLiveInstrument;
+    adapter.resolveAuthoritativeLiveInstrument = async () => null; // Simulate missing authoritative metadata
+    const unverifiedInstResult = await manualTradeService.prepareManualTrade({
+      symbol: 'NIFTY 24000 CE',
+      side: 'BUY',
+      orderType: 'LIMIT',
+      quantity: 25,
+      price: 0.50
+    });
+    if (unverifiedInstResult.ready !== false) {
+      throw new Error('Trade with missing authoritative metadata must not be ready');
+    }
+    const metaReason = unverifiedInstResult.rejectionReasons.find(r => r.includes('AUTHORITATIVE_INSTRUMENT_UNAVAILABLE'));
+    if (!metaReason) {
+      throw new Error(`Expected AUTHORITATIVE_INSTRUMENT_UNAVAILABLE in rejection reasons, got: ${unverifiedInstResult.rejectionReasons.join(', ')}`);
+    }
+    adapter.resolveAuthoritativeLiveInstrument = originalResolver; // restore
+    console.log('  ✓ [19] Missing authoritative metadata strictly blocks live trade preparation.');
+    passedTests++;
+
+    // -------------------------------------------------------------
+    // Test 20: Foreign Currency Budget Bypass Prevention
+    // -------------------------------------------------------------
+    console.log('[TEST 20] Foreign Currency Budget Bypass Prevention...');
+    // A trade in USD: e.g. 1 unit at $0.25 USD.
+    // 0.25 < 20 numerically, but at FX rate 86.50, 0.25 * 86.50 = ₹21.625 INR > ₹20.00!
+    // It must NOT bypass the ₹20 budget!
+    fxProvider.updateRate(86.50, 'LiveFeed', 'TRADE_TIME', 'FRESH');
+    const overBudgetUsdResult = calculateTradeOutlayInr({
+      broker: 'CTRADER',
+      market: 'FOREX',
+      symbol: 'EUR/USD',
+      side: 'BUY',
+      quantity: 1,
+      price: 0.25,
+      quoteCurrency: 'USD'
+    });
+    if (overBudgetUsdResult.outlayInr <= MANUAL_TRADE_SMALL_BUDGET_INR) {
+      throw new Error(`Expected outlayInr to exceed ₹20 (got ${overBudgetUsdResult.outlayInr})`);
+    }
+    // Verify that attempting to confirm an authorization with outlayInr > 20 is strictly blocked
+    // Insert a forged authorization where estimated_outlay is 25.00
+    const forgedAuthId = 'mta-forged-budget-bypass';
+    const forgedToken = 'token-forged';
+    const forgedTokenHash = crypto.createHash('sha256').update(forgedToken).digest('hex');
+    const forgedFp = generateManualTradeFingerprint({
+      broker: 'FIVE_PAISA',
+      environment: 'LIVE',
+      accountId: 'test-client',
+      market: 'INDIAN_OPTIONS',
+      symbol: 'NIFTY 24000 CE',
+      exchange: 'N',
+      exchangeType: 'D',
+      scripCode: '45001',
+      side: 'BUY',
+      orderType: 'LIMIT',
+      quantity: 25,
+      lotSize: 25,
+      price: 1.0,
+      idempotencyKey: 'idem-forged',
+      correlationId: 'corr-forged'
+    });
+    await executeRun(
+      `INSERT INTO manual_trade_authorizations (
+        id, authorization_token_hash, fingerprint, correlation_id, idempotency_key,
+        operator_id, broker, environment, account_id, market, symbol,
+        exchange, exchange_type, scrip_code, side, order_type, quantity,
+        lot_size, price, stop_loss, take_profit, estimated_outlay, outlay_inr,
+        native_currency, native_trade_value, native_charges, native_total_outlay,
+        small_trade_budget, status, created_at, expires_at, payload_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        forgedAuthId, forgedTokenHash, forgedFp, 'corr-forged', 'idem-forged',
+        'OPERATOR', 'FIVE_PAISA', 'LIVE', 'test-client', 'INDIAN_OPTIONS', 'NIFTY 24000 CE',
+        'N', 'D', '45001', 'BUY', 'LIMIT', 25,
+        25, 1.0, null, null, 25.00, 25.00,
+        'INR', 25.00, 0, 25.00,
+        20.00, 'PENDING_CONFIRMATION', Date.now(), Date.now() + 120000, '{}'
+      ]
+    );
+    let bypassCaught = false;
+    try {
+      await manualTradeService.confirmAndExecuteManualTrade({
+        authorizationId: forgedAuthId,
+        authorizationToken: forgedToken,
+        operatorConfirmed: true,
+        confirmedTrade: {
+          symbol: 'NIFTY 24000 CE',
+          exchange: 'N',
+          exchangeType: 'D',
+          scripCode: '45001',
+          side: 'BUY',
+          orderType: 'LIMIT',
+          quantity: 25,
+          price: 1.0
+        }
+      });
+    } catch (err: any) {
+      if (err.message.includes('BUDGET_CONSTRAINT_VIOLATION')) {
+        bypassCaught = true;
+      }
+    }
+    if (!bypassCaught) {
+      throw new Error('Budget bypass confirmation was not rejected with BUDGET_CONSTRAINT_VIOLATION');
+    }
+    console.log('  ✓ [20] Foreign currency and forged outlay budget bypasses strictly prevented.');
+    passedTests++;
+
+    // -------------------------------------------------------------
+    // Test 21: Unconfigured Live FX Feed Rejection
+    // -------------------------------------------------------------
+    console.log('[TEST 21] Unconfigured Live FX Feed Rejection...');
+    fxProvider.updateRate(86.50, 'TestFeed', 'TRADE_TIME', 'FRESH');
+    fxProvider.setLiveSourceStatus('NOT_CONFIGURED');
+    const unconfigResult = calculateTradeOutlayInr({
+      broker: 'CTRADER',
+      market: 'FOREX',
+      symbol: 'USD/INR',
+      side: 'BUY',
+      quantity: 1,
+      price: 1.0,
+      quoteCurrency: 'USD'
+    });
+    if (!unconfigResult.error || !unconfigResult.error.includes('UNCONFIGURED_FX_LIVE_SOURCE')) {
+      throw new Error(`Expected UNCONFIGURED_FX_LIVE_SOURCE, got error: ${unconfigResult.error}`);
+    }
+    console.log('  ✓ [21] Unconfigured live FX feed strictly rejected.');
+    passedTests++;
+
+    // -------------------------------------------------------------
+    // Test 22: Caller Cannot Relabel REFERENCE Rate as TRADE_TIME
+    // -------------------------------------------------------------
+    console.log('[TEST 22] Stored REFERENCE Rate Relabel Prevention...');
+    fxProvider.updateRate(86.50, 'RBI Ref', 'REFERENCE', 'REFERENCE');
+    const queriedRate = fxProvider.getRate('USD', 'INR', Date.now(), 'TRADE_TIME_FX', 'TRADE_TIME');
+    if (queriedRate.rateType === 'TRADE_TIME') {
+      throw new Error('Underlying REFERENCE rate was illicitly relabeled as TRADE_TIME by requestedRateType argument');
+    }
+    if (queriedRate.rateType !== 'REFERENCE') {
+      throw new Error(`Expected queried rateType to remain REFERENCE, got ${queriedRate.rateType}`);
+    }
+    // And calculateTradeOutlayInr must reject it
+    const relabelAttemptOutlay = calculateTradeOutlayInr({
+      broker: 'CTRADER',
+      market: 'FOREX',
+      symbol: 'USD/INR',
+      side: 'BUY',
+      quantity: 1,
+      price: 1.0,
+      quoteCurrency: 'USD'
+    });
+    if (!relabelAttemptOutlay.error || !relabelAttemptOutlay.error.includes('REFERENCE_FX_RATE_REJECTED')) {
+      throw new Error(`Expected REFERENCE_FX_RATE_REJECTED on relabel attempt, got: ${relabelAttemptOutlay.error}`);
+    }
+    // Restore clean trade-time FX rate
+    fxProvider.updateRate(86.50, 'RBI Live', 'TRADE_TIME', 'FRESH');
+    console.log('  ✓ [22] Underlying REFERENCE FX rate cannot be relabeled or bypass trade-time validation.');
     passedTests++;
 
     console.log('================================================================');

@@ -210,7 +210,45 @@ export function calculateTradeOutlayInr(params: {
 
   // Native currency is USD -> convert to INR via FXRateProvider
   const provider = FXRateProvider.getInstance();
-  const fxQuery = provider.getRate('USD', 'INR', Date.now(), 'TRADE_TIME_FX', 'TRADE_TIME');
+  const fxQuery = provider.getRate('USD', 'INR', Date.now(), 'TRADE_TIME_FX');
+
+  // Reject reference-only rates (verify actual stored rate provenance, not just requested type)
+  if (
+    fxQuery.rateStatus === 'REFERENCE' ||
+    fxQuery.rateType === 'REFERENCE' ||
+    provider.getRateType() === 'REFERENCE' ||
+    provider.getRateStatus() === 'REFERENCE'
+  ) {
+    return {
+      nativeCurrency: 'USD',
+      nativeTradeValue: rawOrderValue,
+      nativeCharges: totalCharges,
+      nativeTotalOutlay,
+      fxConversionRate: fxQuery.rate,
+      fxRateStatus: 'REFERENCE',
+      outlayInr: 0,
+      chargesInr: 0,
+      chargesBreakdown,
+      error: `REFERENCE_FX_RATE_REJECTED: Live manual trades require validated trade-time or fresh FX provenance. Reference-only rate status '${fxQuery.rateStatus}' (type: ${fxQuery.rateType}) is not permitted. A recent retrieval timestamp alone is insufficient.`
+    };
+  }
+
+  // Verify active configured live source feed
+  const liveSourceStatus = provider.getLiveSourceStatus();
+  if (liveSourceStatus !== 'CONNECTED') {
+    return {
+      nativeCurrency: 'USD',
+      nativeTradeValue: rawOrderValue,
+      nativeCharges: totalCharges,
+      nativeTotalOutlay,
+      fxConversionRate: fxQuery.rate || 0,
+      fxRateStatus: fxQuery.rateStatus || 'UNAVAILABLE',
+      outlayInr: 0,
+      chargesInr: 0,
+      chargesBreakdown,
+      error: `UNCONFIGURED_FX_LIVE_SOURCE: Live manual trades require an active, configured live FX source feed (status: ${liveSourceStatus}).`
+    };
+  }
 
   if (
     fxQuery.status !== 'AVAILABLE' ||
@@ -232,7 +270,7 @@ export function calculateTradeOutlayInr(params: {
     };
   }
 
-  if (fxQuery.rateStatus === 'INVALID') {
+  if (fxQuery.rateStatus === 'INVALID' || provider.getRateStatus() === 'INVALID') {
     return {
       nativeCurrency: 'USD',
       nativeTradeValue: rawOrderValue,
@@ -247,22 +285,7 @@ export function calculateTradeOutlayInr(params: {
     };
   }
 
-  if (fxQuery.rateStatus === 'REFERENCE' || fxQuery.rateType === 'REFERENCE') {
-    return {
-      nativeCurrency: 'USD',
-      nativeTradeValue: rawOrderValue,
-      nativeCharges: totalCharges,
-      nativeTotalOutlay,
-      fxConversionRate: fxQuery.rate,
-      fxRateStatus: 'REFERENCE',
-      outlayInr: 0,
-      chargesInr: 0,
-      chargesBreakdown,
-      error: `REFERENCE_FX_RATE_REJECTED: Live manual trades require validated trade-time or fresh FX provenance. Reference-only rate status '${fxQuery.rateStatus}' (type: ${fxQuery.rateType}) is not permitted. A recent retrieval timestamp alone is insufficient.`
-    };
-  }
-
-  if (fxQuery.rateStatus === 'STALE') {
+  if (fxQuery.rateStatus === 'STALE' || provider.getRateStatus() === 'STALE') {
     return {
       nativeCurrency: 'USD',
       nativeTradeValue: rawOrderValue,
@@ -291,6 +314,21 @@ export function calculateTradeOutlayInr(params: {
       chargesInr: 0,
       chargesBreakdown,
       error: `STALE_FX_RATE: USD/INR conversion rate retrieved at ${new Date(fxQuery.retrievedAt).toISOString()} exceeds maximum 5-minute freshness age.`
+    };
+  }
+
+  if (fxQuery.effectiveAt && Date.now() - fxQuery.effectiveAt > MAX_FX_AGE_MS) {
+    return {
+      nativeCurrency: 'USD',
+      nativeTradeValue: rawOrderValue,
+      nativeCharges: totalCharges,
+      nativeTotalOutlay,
+      fxConversionRate: fxQuery.rate,
+      fxRateStatus: 'STALE',
+      outlayInr: 0,
+      chargesInr: 0,
+      chargesBreakdown,
+      error: `STALE_FX_RATE: USD/INR conversion rate effective at ${new Date(fxQuery.effectiveAt).toISOString()} exceeds maximum 5-minute freshness age.`
     };
   }
 
@@ -392,6 +430,19 @@ export interface ConfirmManualTradeResult {
   message: string;
   error?: string;
   executedAt?: number;
+}
+
+let explicitTestFixtureInstruments: any[] | null = null;
+
+/**
+ * Registers isolated test fixture instruments for non-production automated testing.
+ * Cannot be activated by a production environment variable or database filename alone.
+ */
+export function registerTestFixtureInstruments(instruments: any[] | null): void {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('SECURITY_VIOLATION: Test fixtures cannot be registered in production environment.');
+  }
+  explicitTestFixtureInstruments = instruments;
 }
 
 export class ManualTradeService {
@@ -501,20 +552,10 @@ export class ManualTradeService {
         }
       }
 
-      // If remote scrip master is empty, allow isolated test environment mock scrip master population or fail closed in production
+      // If remote scrip master is empty, allow isolated test fixture instruments if explicitly registered and not in production
       if (rows.length === 0) {
-        const isTestEnv = process.env.NODE_ENV === 'test' || Boolean(process.env.GOLDCREST_DB_FILE?.includes('test_'));
-        if (isTestEnv) {
-          const standards = [
-            { symbol: 'NIFTY 24000 CE', name: 'NIFTY 50 24000 CE', exchange: 'N', exchangeType: 'D', segment: 'DERIVATIVES', scripCode: '45001', lotSize: 25, tickSize: 0.05, digits: 2 },
-            { symbol: 'NIFTY 24000 PE', name: 'NIFTY 50 24000 PE', exchange: 'N', exchangeType: 'D', segment: 'DERIVATIVES', scripCode: '45002', lotSize: 25, tickSize: 0.05, digits: 2 },
-            { symbol: 'NIFTY 24500 CE', name: 'NIFTY 50 24500 CE', exchange: 'N', exchangeType: 'D', segment: 'DERIVATIVES', scripCode: '45003', lotSize: 25, tickSize: 0.05, digits: 2 },
-            { symbol: 'NIFTY 24500 PE', name: 'NIFTY 50 24500 PE', exchange: 'N', exchangeType: 'D', segment: 'DERIVATIVES', scripCode: '45004', lotSize: 25, tickSize: 0.05, digits: 2 },
-            { symbol: 'BANKNIFTY 52000 CE', name: 'NIFTY BANK 52000 CE', exchange: 'N', exchangeType: 'D', segment: 'DERIVATIVES', scripCode: '45101', lotSize: 15, tickSize: 0.05, digits: 2 },
-            { symbol: 'BANKNIFTY 52000 PE', name: 'NIFTY BANK 52000 PE', exchange: 'N', exchangeType: 'D', segment: 'DERIVATIVES', scripCode: '45102', lotSize: 15, tickSize: 0.05, digits: 2 },
-            { symbol: 'RELIANCE', name: 'RELIANCE INDUSTRIES LTD', exchange: 'N', exchangeType: 'C', segment: 'EQUITY', scripCode: '2885', lotSize: 1, tickSize: 0.05, digits: 2 }
-          ];
-          return standards.filter(s => !search || s.symbol.includes(search) || s.name.includes(search));
+        if (explicitTestFixtureInstruments && process.env.NODE_ENV !== 'production') {
+          return explicitTestFixtureInstruments.filter(s => !search || s.symbol.includes(search) || s.name.includes(search));
         }
       }
 
@@ -612,32 +653,22 @@ export class ManualTradeService {
       : 'FOREX';
 
     let resolvedInst: any = null;
-    if (symbol && selectedBroker === 'FIVE_PAISA') {
+    if (symbol && (selectedBroker === 'FIVE_PAISA' || selectedBroker === 'CTRADER')) {
       try {
         if (typeof adapter.resolveAuthoritativeLiveInstrument === 'function') {
           resolvedInst = await adapter.resolveAuthoritativeLiveInstrument(symbol, market);
         } else {
-          // Mock / test adapter fallback
-          const inst = await adapter.getInstrument(symbol);
-          resolvedInst = {
-            exchange: input.exchange || (symbol.startsWith('SENSEX') ? 'B' : 'N'),
-            exchangeType: (input.segment === 'EQUITY' || market === 'INDIAN_EQUITY') ? 'C' : 'D',
-            scripCode: inst?.brokerInstrumentId || '99999',
-            lotSize: inst?.minQuantity || (inst as any)?.lotSize || (symbol.includes('BANKNIFTY') ? 15 : symbol.includes('NIFTY') ? 25 : 1),
-            symbol
-          };
+          rejectionReasons.push(`AUTHORITATIVE_INSTRUMENT_UNAVAILABLE: Broker adapter for ${selectedBroker} does not implement resolveAuthoritativeLiveInstrument.`);
         }
       } catch (instErr: any) {
         rejectionReasons.push(`AUTHORITATIVE_INSTRUMENT_UNAVAILABLE: ${instErr?.message || instErr}`);
       }
-    } else if (symbol && selectedBroker === 'CTRADER') {
-      resolvedInst = {
-        exchange: 'CTRADER',
-        exchangeType: 'FX',
-        scripCode: '1',
-        lotSize: 1,
-        symbol
-      };
+    } else if (symbol) {
+      rejectionReasons.push(`UNSUPPORTED_BROKER: Broker ${selectedBroker} does not support live manual trading.`);
+    }
+
+    if (!resolvedInst || !resolvedInst.scripCode || resolvedInst.scripCode === '99999' || resolvedInst.scripCode === 'FABRICATED') {
+      rejectionReasons.push(`AUTHORITATIVE_INSTRUMENT_UNAVAILABLE: Authoritative instrument metadata could not be verified for ${symbol}. Fabricated fallback instruments are strictly prohibited.`);
     }
 
     const lotSize = Number(resolvedInst?.lotSize || 1);
@@ -732,10 +763,27 @@ export class ManualTradeService {
       );
     }
 
-    // 9. Account Available Funds check
+    // 9. Account Available Funds check (converted into same currency)
+    const provider = FXRateProvider.getInstance();
     const availableFunds = Number(account?.availableMargin ?? account?.balance ?? 0);
-    if (account && availableFunds < totalEstimatedOutlay) {
-      rejectionReasons.push(`INSUFFICIENT_FUNDS: Required outlay of ₹${totalEstimatedOutlay.toFixed(2)} exceeds available account balance/margin (₹${availableFunds.toFixed(2)}).`);
+    const accountCurrency = String(account?.currency || (selectedBroker === 'CTRADER' ? 'USD' : 'INR')).toUpperCase();
+    let requiredFundsInAccountCurrency = outlayResult.nativeTotalOutlay;
+
+    if (accountCurrency === 'INR' && outlayResult.nativeCurrency !== 'INR') {
+      requiredFundsInAccountCurrency = outlayResult.outlayInr;
+    } else if (accountCurrency === 'USD' && outlayResult.nativeCurrency === 'INR') {
+      const inverseQuery = provider.getRate('INR', 'USD');
+      if (inverseQuery.status !== 'AVAILABLE' || !inverseQuery.rate) {
+        rejectionReasons.push('FX_RATE_UNAVAILABLE: Cannot convert INR outlay to USD for account available funds validation.');
+      } else {
+        requiredFundsInAccountCurrency = Number((outlayResult.outlayInr * inverseQuery.rate).toFixed(4));
+      }
+    }
+
+    if (account && availableFunds < requiredFundsInAccountCurrency) {
+      rejectionReasons.push(
+        `INSUFFICIENT_FUNDS: Required outlay of ${accountCurrency} ${requiredFundsInAccountCurrency.toFixed(2)} exceeds available account balance/margin (${accountCurrency} ${availableFunds.toFixed(2)}).`
+      );
     }
 
     // If any checks failed, return blocked result
@@ -814,6 +862,14 @@ export class ManualTradeService {
       rawOrderValue,
       estimatedCharges,
       chargesBreakdown,
+      nativeTotalOutlay: totalEstimatedOutlay,
+      outlayInr: totalOutlayInr,
+      nativeCurrency: outlayResult.nativeCurrency,
+      nativeTradeValue: rawOrderValue,
+      nativeCharges: estimatedCharges,
+      fxConversionRate: outlayResult.fxConversionRate,
+      fxRateStatus: outlayResult.fxRateStatus,
+      fxRetrievedAt: outlayResult.fxRetrievedAt,
       totalEstimatedOutlay,
       smallTradeBudget,
       fingerprint,
@@ -827,10 +883,12 @@ export class ManualTradeService {
         id, authorization_token_hash, fingerprint, correlation_id, idempotency_key,
         operator_id, broker, environment, account_id, market, symbol,
         exchange, exchange_type, scrip_code, side, order_type, quantity,
-        lot_size, price, stop_loss, take_profit, estimated_outlay, small_trade_budget,
-        status, rejection_reason, broker_order_id, created_at, expires_at,
-        confirmed_at, consumed_at, payload_json, result_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        lot_size, price, stop_loss, take_profit, estimated_outlay,
+        outlay_inr, native_currency, native_trade_value, native_charges,
+        native_total_outlay, fx_rate, fx_source, fx_retrieved_at, fx_rate_status,
+        small_trade_budget, status, rejection_reason, broker_order_id,
+        created_at, expires_at, confirmed_at, consumed_at, payload_json, result_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         authorizationId,
         authorizationTokenHash,
@@ -853,7 +911,16 @@ export class ManualTradeService {
         price,
         stopLoss,
         takeProfit,
+        totalOutlayInr, // Authoritative INR amount in estimated_outlay
+        totalOutlayInr, // outlay_inr
+        outlayResult.nativeCurrency,
+        rawOrderValue,
+        estimatedCharges,
         totalEstimatedOutlay,
+        outlayResult.fxConversionRate,
+        outlayResult.nativeCurrency === 'INR' ? 'IDENTITY' : provider.getRateSource(),
+        outlayResult.fxRetrievedAt || now,
+        outlayResult.fxRateStatus,
         smallTradeBudget,
         'PENDING_CONFIRMATION',
         null,
@@ -1092,7 +1159,87 @@ export class ManualTradeService {
       _lotSize: Number(record.lot_size)
     };
 
-    const adapter = brokerRegistry.getAdapter(record.broker as BrokerType, 'LIVE');
+    const adapter = brokerRegistry.getAdapter(record.broker as BrokerType, 'LIVE') as any;
+
+    // -------------------------------------------------------------
+    // Pre-Submission Immediate Safety & Provenance Revalidations
+    // -------------------------------------------------------------
+    // A. Revalidate active selected broker
+    const currentSelectedBroker = brokerRegistry.getSelectedBroker();
+    if (record.broker !== currentSelectedBroker) {
+      throw new Error(`BROKER_MISMATCH: Authorization is for broker '${record.broker}', but currently selected broker is '${currentSelectedBroker}'.`);
+    }
+
+    // B. Revalidate broker connection
+    const conn = await adapter.testConnection();
+    if (!conn?.connected) {
+      throw new Error(`BROKER_NOT_CONNECTED: Active LIVE connection to broker '${record.broker}' is unavailable.`);
+    }
+
+    // C. Revalidate live account identity and permissions
+    const account = await adapter.getAccount();
+    if (account.accountId !== record.account_id) {
+      throw new Error(`ACCOUNT_IDENTITY_MISMATCH: Live account changed from '${record.account_id}' to '${account.accountId}'.`);
+    }
+    if (account.accountType !== 'LIVE' && account.isLiveAccount === false) {
+      throw new Error('ACCOUNT_NOT_LIVE: Account is not in LIVE mode.');
+    }
+
+    // D. Revalidate authoritative broker instrument metadata
+    if (typeof adapter.resolveAuthoritativeLiveInstrument !== 'function') {
+      throw new Error(`AUTHORITATIVE_INSTRUMENT_UNAVAILABLE: Broker adapter for ${record.broker} does not implement resolveAuthoritativeLiveInstrument.`);
+    }
+    const authInst = await adapter.resolveAuthoritativeLiveInstrument(record.symbol, record.market);
+    if (!authInst || !authInst.scripCode || authInst.scripCode === '99999' || authInst.scripCode === 'FABRICATED') {
+      throw new Error(`AUTHORITATIVE_INSTRUMENT_UNAVAILABLE: Authoritative remote instrument metadata unavailable for ${record.symbol}.`);
+    }
+    if (String(authInst.scripCode) !== String(record.scrip_code) || Number(authInst.lotSize) !== Number(record.lot_size)) {
+      throw new Error(`AUTHORITATIVE_INSTRUMENT_UNAVAILABLE: Authoritative instrument metadata changed (scrip: ${authInst.scripCode} vs ${record.scrip_code}, lot: ${authInst.lotSize} vs ${record.lot_size}).`);
+    }
+
+    // E. Recompute and revalidate INR outlay using fresh evidence (fail-closed if > ₹20)
+    const quoteCurrency = authInst?.quoteCurrency || (record.broker === 'CTRADER' ? record.symbol.split('/')[1] : 'INR');
+    const freshOutlay = calculateTradeOutlayInr({
+      broker: record.broker as BrokerType,
+      market: record.market,
+      symbol: record.symbol,
+      side: record.side as 'BUY' | 'SELL',
+      quantity: Number(record.quantity),
+      price: Number(record.price),
+      quoteCurrency
+    });
+
+    if (freshOutlay.error) {
+      throw new Error(`FRESH_OUTLAY_CALCULATION_FAILED: ${freshOutlay.error}`);
+    }
+
+    if (freshOutlay.outlayInr > MANUAL_TRADE_SMALL_BUDGET_INR + 1e-6) {
+      throw new Error(`BUDGET_CONSTRAINT_VIOLATION: Fresh outlay ₹${freshOutlay.outlayInr.toFixed(2)} exceeds ₹${MANUAL_TRADE_SMALL_BUDGET_INR.toFixed(2)} Small Trade Budget limit.`);
+    }
+
+    // F. Revalidate available funds in the SAME currency
+    const availableFunds = Number(account?.availableMargin ?? account?.balance ?? 0);
+    const accountCurrency = String(account?.currency || (record.broker === 'CTRADER' ? 'USD' : 'INR')).toUpperCase();
+    let requiredFundsInAccountCurrency = freshOutlay.nativeTotalOutlay;
+
+    if (accountCurrency === 'INR' && freshOutlay.nativeCurrency !== 'INR') {
+      requiredFundsInAccountCurrency = freshOutlay.outlayInr;
+    } else if (accountCurrency === 'USD' && freshOutlay.nativeCurrency === 'INR') {
+      const inverseQuery = FXRateProvider.getInstance().getRate('INR', 'USD');
+      if (inverseQuery.status !== 'AVAILABLE' || !inverseQuery.rate) {
+        throw new Error('FX_RATE_UNAVAILABLE: Cannot convert INR outlay to USD for account available funds validation.');
+      }
+      requiredFundsInAccountCurrency = Number((freshOutlay.outlayInr * inverseQuery.rate).toFixed(4));
+    }
+
+    if (availableFunds < requiredFundsInAccountCurrency) {
+      throw new Error(`INSUFFICIENT_FUNDS: Available funds (${accountCurrency} ${availableFunds.toFixed(2)}) less than required trade outlay (${requiredFundsInAccountCurrency.toFixed(2)}).`);
+    }
+
+    // G. Immediate kill switch check immediately before submission
+    if (killSwitch.isHalted()) {
+      throw new Error('EMERGENCY_KILL_SWITCH_ACTIVE: Emergency stop triggered prior to order submission. Manual live order submission is blocked.');
+    }
 
     let placedOrder: NormalizedOrder | null = null;
     let submissionError: any = null;

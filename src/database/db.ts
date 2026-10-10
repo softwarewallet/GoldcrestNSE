@@ -575,6 +575,15 @@ function initSchema(db: Database) {
       stop_loss REAL,
       take_profit REAL,
       estimated_outlay REAL NOT NULL,
+      outlay_inr REAL,
+      native_currency TEXT,
+      native_trade_value REAL,
+      native_charges REAL,
+      native_total_outlay REAL,
+      fx_rate REAL,
+      fx_source TEXT,
+      fx_retrieved_at INTEGER,
+      fx_rate_status TEXT,
       small_trade_budget REAL NOT NULL,
       status TEXT NOT NULL,
       rejection_reason TEXT,
@@ -817,7 +826,16 @@ function initSchema(db: Database) {
     'ALTER TABLE first_live_ledger ADD COLUMN scrip_code TEXT;',
     'ALTER TABLE first_live_ledger ADD COLUMN broker_instrument_id TEXT;',
     'ALTER TABLE first_live_ledger ADD COLUMN lot_size REAL;',
-    'ALTER TABLE execution_intents ADD COLUMN broker_order_id TEXT;'
+    'ALTER TABLE execution_intents ADD COLUMN broker_order_id TEXT;',
+    'ALTER TABLE manual_trade_authorizations ADD COLUMN outlay_inr REAL;',
+    'ALTER TABLE manual_trade_authorizations ADD COLUMN native_currency TEXT;',
+    'ALTER TABLE manual_trade_authorizations ADD COLUMN native_trade_value REAL;',
+    'ALTER TABLE manual_trade_authorizations ADD COLUMN native_charges REAL;',
+    'ALTER TABLE manual_trade_authorizations ADD COLUMN native_total_outlay REAL;',
+    'ALTER TABLE manual_trade_authorizations ADD COLUMN fx_rate REAL;',
+    'ALTER TABLE manual_trade_authorizations ADD COLUMN fx_source TEXT;',
+    'ALTER TABLE manual_trade_authorizations ADD COLUMN fx_retrieved_at INTEGER;',
+    'ALTER TABLE manual_trade_authorizations ADD COLUMN fx_rate_status TEXT;'
   ];
   try {
     db.run('ALTER TABLE execution_intents ADD COLUMN claim_token TEXT;');

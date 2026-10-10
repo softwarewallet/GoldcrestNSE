@@ -1045,6 +1045,13 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
    * Built-in fallback metadata must NEVER authorize or execute a live order.
    * If remote ScripMaster is unavailable or the instrument is not found remotely, throws AUTHORITATIVE_INSTRUMENT_UNAVAILABLE.
    */
+  public setTestAuthoritativeInstrument(inst: any): void {
+    if (process.env.NODE_ENV === 'production') {
+      throw new BrokerError('SECURITY_VIOLATION', 'Test fixture cannot authorize production live order.', 'FIVE_PAISA', this.environment);
+    }
+    (this as any)._mockAuthoritativeInstrument = inst;
+  }
+
   public async resolveAuthoritativeLiveInstrument(
     symbol: string,
     market?: string
@@ -1069,21 +1076,20 @@ export abstract class FivePaisaBrokerAdapter extends BaseBrokerAdapter {
     const isDeriv = market === 'INDIAN_OPTIONS' || market === 'INDIAN_FUTURES' || /(?:CE|PE)$/i.test(normalized);
 
     const isTestExecution = (process.env.NODE_ENV === 'test' ||
-      Boolean(process.env.GOLDCREST_DB_FILE?.includes('test_')) ||
       Boolean((global as any).__GOLDCREST_CERT_BOUNDARY_HOOK) ||
       this.getInstrument !== FivePaisaBrokerAdapter.prototype.getInstrument) &&
       process.env.NODE_ENV !== 'production';
 
     // In automated tests where remoteScripMaster is not loaded, permit test adapter mock override
-    // ONLY if the test instrument has a real, non-fabricated brokerInstrumentId and valid lotSize
+    // ONLY if the test instrument has a real, non-fabricated brokerInstrumentId and verified authoritative lotSize
     if (isTestExecution && !this.remoteScripMasterLoaded && this.remoteScripMasterRows.length === 0) {
       const inst = await this.getInstrument(symbol);
       if (inst && inst.brokerInstrumentId && inst.brokerInstrumentId !== '99999' && inst.brokerInstrumentId !== 'FABRICATED') {
-        const lot = inst.minQuantity || (inst as any).lotSize || (symbol.includes('BANKNIFTY') ? 15 : 25);
-        if (!lot || Number(lot) <= 0) {
+        const lot = inst.minQuantity || (inst as any).lotSize;
+        if (!lot || Number(lot) <= 0 || isNaN(Number(lot))) {
           throw new BrokerError(
             'AUTHORITATIVE_INSTRUMENT_UNAVAILABLE',
-            `Invalid lot size for instrument ${symbol}. Built-in fallbacks are forbidden.`,
+            `Invalid or missing authoritative lot size for instrument ${symbol}. Built-in fallbacks or assumed lot sizes are strictly forbidden.`,
             'FIVE_PAISA',
             this.environment
           );
