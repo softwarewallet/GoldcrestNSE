@@ -1,7 +1,8 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { manualTradeService, generateManualTradeFingerprint, MANUAL_TRADE_SMALL_BUDGET_INR } from '../src/services/manualTradeService';
+import { manualTradeService, generateManualTradeFingerprint, MANUAL_TRADE_SMALL_BUDGET_INR, calculateTradeOutlayInr } from '../src/services/manualTradeService';
+import { FXRateProvider } from '../src/accounting/fxRateProvider';
 import { brokerRegistry } from '../src/brokers/registry';
 import { killSwitch } from '../src/brokers/safety/KillSwitch';
 import { isExecutionGateUnlocked } from '../src/brokers/safety/AutoExecutionEngine';
@@ -39,7 +40,7 @@ async function runManualTradeCertificationTests() {
   console.log('================================================================');
 
   let passedTests = 0;
-  const totalTests = 16;
+  const totalTests = 18;
 
   try {
     await getDatabase();
@@ -479,6 +480,48 @@ async function runManualTradeCertificationTests() {
       throw new Error('Autonomous gate must still be locked after all manual tests');
     }
     console.log('  ✓ [16] Global autonomous execution gate remained locked throughout all manual trade operations.');
+    passedTests++;
+
+    // -------------------------------------------------------------
+    // Test 17: Reference-Only FX Rate Rejection for Forex Trades
+    // -------------------------------------------------------------
+    console.log('[TEST 17] Reference-Only FX Rate Rejection...');
+    const fxProvider = FXRateProvider.getInstance();
+    fxProvider.updateRate(86.50, 'RBI Ref', 'REFERENCE', 'REFERENCE');
+    const refFxResult = calculateTradeOutlayInr({
+      broker: 'CTRADER',
+      market: 'FOREX',
+      symbol: 'USD/INR',
+      side: 'BUY',
+      quantity: 1,
+      price: 1.0,
+      quoteCurrency: 'USD'
+    });
+    if (!refFxResult.error || !refFxResult.error.includes('REFERENCE_FX_RATE_REJECTED')) {
+      throw new Error(`Expected REFERENCE_FX_RATE_REJECTED, got error: ${refFxResult.error}`);
+    }
+    console.log('  ✓ [17] Reference-only FX rate cleanly rejected.');
+    passedTests++;
+
+    // -------------------------------------------------------------
+    // Test 18: Stale FX Rate Rejection
+    // -------------------------------------------------------------
+    console.log('[TEST 18] Stale FX Rate Rejection...');
+    fxProvider.invalidateRate('STALE');
+    const staleFxResult = calculateTradeOutlayInr({
+      broker: 'CTRADER',
+      market: 'FOREX',
+      symbol: 'USD/INR',
+      side: 'BUY',
+      quantity: 1,
+      price: 1.0,
+      quoteCurrency: 'USD'
+    });
+    if (!staleFxResult.error || (!staleFxResult.error.includes('STALE_FX_RATE') && !staleFxResult.error.includes('MISSING_FX_CONVERSION_RATE'))) {
+      throw new Error(`Expected STALE_FX_RATE or MISSING_FX_CONVERSION_RATE, got error: ${staleFxResult.error}`);
+    }
+    fxProvider.updateRate(86.50, 'RBI Trade', 'TRADE_TIME', 'FRESH'); // restore valid rate
+    console.log('  ✓ [18] Stale FX rate cleanly rejected.');
     passedTests++;
 
     console.log('================================================================');

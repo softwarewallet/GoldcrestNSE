@@ -247,6 +247,21 @@ export function calculateTradeOutlayInr(params: {
     };
   }
 
+  if (fxQuery.rateStatus === 'REFERENCE' || fxQuery.rateType === 'REFERENCE') {
+    return {
+      nativeCurrency: 'USD',
+      nativeTradeValue: rawOrderValue,
+      nativeCharges: totalCharges,
+      nativeTotalOutlay,
+      fxConversionRate: fxQuery.rate,
+      fxRateStatus: 'REFERENCE',
+      outlayInr: 0,
+      chargesInr: 0,
+      chargesBreakdown,
+      error: `REFERENCE_FX_RATE_REJECTED: Live manual trades require validated trade-time or fresh FX provenance. Reference-only rate status '${fxQuery.rateStatus}' (type: ${fxQuery.rateType}) is not permitted. A recent retrieval timestamp alone is insufficient.`
+    };
+  }
+
   if (fxQuery.rateStatus === 'STALE') {
     return {
       nativeCurrency: 'USD',
