@@ -75,7 +75,7 @@ add(23,'Release builder carries declared runtime',()=>{const b=buildProductionRe
 add(24,'Release builder carries LIVE_ONLY mode',()=>{const b=buildProductionReleaseIntegrityInput({...validReleaseInput,rootDirectory:dir});assert.equal(b.tradingMode,'LIVE_ONLY');});
 
 add(25,'Configuration LIVE_ONLY remains enforced',()=>assert.equal(config.tradingMode,'LIVE_ONLY'));
-add(26,'Default cTrader API mode remains DEMO',()=>assert.equal(config.cTraderApiMode,'DEMO'));
+add(26,'Default cTrader API mode remains DEMO',()=>assert.equal(getSystemConfig().cTraderApiMode,'DEMO'));
 add(27,'Configuration candidate with supported cTrader LIVE mode is valid',()=>assert.equal(evaluateSystemConfigIntegrity(prepareSystemConfigUpdate({cTraderApiMode:'LIVE'})).ok,true));
 add(28,'Configuration candidate with supported cTrader DEMO mode is valid',()=>assert.equal(evaluateSystemConfigIntegrity(prepareSystemConfigUpdate({cTraderApiMode:'DEMO'})).ok,true));
 add(29,'Configuration rejects invalid cTrader API mode',()=>assert.throws(()=>prepareSystemConfigUpdate({cTraderApiMode:'PAPER' as any}),/cTrader API mode must be LIVE or DEMO/));

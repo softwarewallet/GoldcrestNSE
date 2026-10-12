@@ -3,6 +3,8 @@ import { Activity, AlertOctagon, BarChart2, Database, RefreshCw, ShieldAlert } f
 import { IndianSessionState } from '../markets/common/types';
 import { BrokerType, TradingEnvironment } from '../brokers/types';
 import { BalanceDisplay } from './BalanceDisplay';
+import { BlessingBanner } from './BlessingBanner';
+import { NseMarketClock } from './NseMarketClock';
 
 interface HeaderProps {
   activeTab: string;
@@ -42,8 +44,6 @@ export const Header: React.FC<HeaderProps> = ({
     activeTab === 'signals' ? 'STRATEGY' :
     activeTab === 'research' ? 'BACKTEST' :
     activeTab === 'settings' ? 'SETTINGS' : 'INDIAN MARKET';
-
-  const nseOpen = indianSession.isOpen;
 
   return (
     <header
@@ -105,21 +105,15 @@ export const Header: React.FC<HeaderProps> = ({
           <BalanceDisplay environment="LIVE" />
         </div>
 
-        <div className="flex flex-col gap-1.5 min-w-[210px] shrink-0">
-          <div
-            id="header_nse_session_badge"
-            className={`h-8 flex items-center gap-2 px-3 rounded border text-xs font-mono ${
-              nseOpen ? 'bg-emerald-950/40 border-emerald-800/60 text-emerald-300' : 'bg-slate-950 border-slate-800 text-slate-400'
-            }`}
-          >
-            <Activity className={`w-3.5 h-3.5 ${nseOpen ? 'text-emerald-400' : 'text-amber-400'}`} />
-            <span className="text-slate-400 font-semibold">NSE:</span>
-            <span className={`w-2 h-2 rounded-full ${nseOpen ? 'bg-emerald-500' : 'bg-amber-500/80'}`} />
-            <span>{indianSession.istTime || '—'} ({indianSession.currentPhase})</span>
-          </div>
+        <div className="flex flex-col justify-center shrink-0">
+          <NseMarketClock initialSession={indianSession} />
         </div>
 
-        <div className="ml-auto flex items-center gap-2 shrink-0">
+        <div className="flex-1 flex items-center justify-center min-w-0 px-2 overflow-hidden">
+          <BlessingBanner />
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
           <button
             id="btn_emergency_stop"
             onClick={onToggleKillSwitch}

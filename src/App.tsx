@@ -5,6 +5,7 @@ import { SignalsView } from './components/SignalsView';
 import { TradingHub } from './components/TradingHub';
 import { TradingOperationsDashboard } from './components/TradingOperationsDashboard';
 import { TradingControlCenter } from './components/TradingControlCenter';
+import { MasterDashboard } from './components/MasterDashboard';
 import { HistoryPage } from './components/HistoryPage';
 import { DatabaseExplorerPage } from './components/DatabaseExplorerPage';
 import { SettingsHub } from './components/SettingsHub';
@@ -18,7 +19,7 @@ import { getIndianSessionState } from './markets/common/session';
 import { BrokerType, TradingEnvironment, OrderRequest } from './brokers/types';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<string>('trading');
+  const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [indianUnderlyings, setIndianUnderlyings] = useState<any[]>([]);
   const [indianSession, setIndianSession] = useState<IndianSessionState>(() => getIndianSessionState(new Date()));
   const [signals, setSignals] = useState<TradingSignal[]>([]);
@@ -282,7 +283,8 @@ export default function App() {
       }
     >
       {/* Fixed global shell content outlet: dashboards and all secondary pages render here. */}
-      <main className="min-h-[calc(100vh-162px)] w-full px-4 sm:px-6 lg:px-8 py-5 space-y-4 bg-[#03070d] text-slate-100">
+      <main className="min-h-[calc(100vh-162px)] w-full bg-[#03070d] text-slate-100">
+        <main className="p-0 space-y-4">
         {loadingInitial ? (
           <div className="flex flex-col items-center justify-center min-h-[50vh] space-y-3 font-mono">
             <div className="w-10 h-10 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
@@ -300,6 +302,18 @@ export default function App() {
                 currency={currency}
                 isEmergencyHalted={isEmergencyHalted}
                 onRequestEnvironmentChange={handleRequestEnvironmentChange}
+              />
+            )}
+
+            {activeTab === 'dashboard' && (
+              <MasterDashboard
+                signals={signals}
+                candlesMap={candlesMap}
+                indianUnderlyings={indianUnderlyings}
+                indianSession={indianSession}
+                selectedBroker={selectedBroker}
+                environment={environment}
+                onExecuteOrder={handleExecuteConfirmedOrder}
               />
             )}
 
@@ -342,6 +356,7 @@ export default function App() {
             </>
           )}
         </main>
+      </main>
  
       {/* Signal Quantitative Inspection Modal */}
       {selectedSignal && (

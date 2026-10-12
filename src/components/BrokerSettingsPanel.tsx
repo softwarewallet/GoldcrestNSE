@@ -65,6 +65,7 @@ export const BrokerSettingsPanel: React.FC<BrokerSettingsPanelProps> = ({
   const [testing, setTesting] = useState(false);
   const [loading, setLoading] = useState(true);
   const [maxIndianInr, setMaxIndianInr] = useState(1000000);
+  const [dailyProfitTarget, setDailyProfitTarget] = useState(500);
   const [savingLimits, setSavingLimits] = useState(false);
   const [limitMessage, setLimitMessage] = useState('');
   const [autoLiveMinSignalScore, setAutoLiveMinSignalScore] = useState(75);
@@ -95,6 +96,9 @@ export const BrokerSettingsPanel: React.FC<BrokerSettingsPanelProps> = ({
         const config = await configRes.json();
         if (Number.isFinite(Number(config.maxTradeValueIndianInr))) {
           setMaxIndianInr(Number(config.maxTradeValueIndianInr));
+        }
+        if (Number.isFinite(Number(config.dailyProfitTarget))) {
+          setDailyProfitTarget(Number(config.dailyProfitTarget));
         }
         if (Number.isFinite(Number(config.autoLiveMinSignalScore))) {
           setAutoLiveMinSignalScore(Number(config.autoLiveMinSignalScore));
@@ -208,12 +212,29 @@ export const BrokerSettingsPanel: React.FC<BrokerSettingsPanelProps> = ({
                   <span className="text-[10px] text-slate-500 font-mono whitespace-nowrap">INR</span>
                 </div>
               </label>
+              <label className="block space-y-1">
+                <span className="text-[10px] uppercase text-slate-500 font-mono flex items-center gap-1">
+                  <IndianRupee className="w-3 h-3" /> Daily Profit Target (INR)
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-500 font-mono">₹</span>
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={dailyProfitTarget}
+                    onChange={e => setDailyProfitTarget(Number(e.target.value))}
+                    className={inputClass}
+                  />
+                  <span className="text-[10px] text-slate-500 font-mono whitespace-nowrap">INR</span>
+                </div>
+              </label>
             </div>
             <div className="flex items-center gap-3 mt-4">
               <button
                 onClick={async () => {
-                  if (!Number.isFinite(maxIndianInr) || maxIndianInr <= 0) {
-                    setLimitMessage('Maximum trade value must be a positive number.');
+                  if (!Number.isFinite(maxIndianInr) || maxIndianInr <= 0 || !Number.isFinite(dailyProfitTarget) || dailyProfitTarget < 0) {
+                    setLimitMessage('Values must be valid positive numbers.');
                     return;
                   }
                   setSavingLimits(true);
@@ -222,11 +243,11 @@ export const BrokerSettingsPanel: React.FC<BrokerSettingsPanelProps> = ({
                     const res = await fetch('/api/config', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ maxTradeValueIndianInr: maxIndianInr })
+                      body: JSON.stringify({ maxTradeValueIndianInr: maxIndianInr, dailyProfitTarget: dailyProfitTarget })
                     });
                     const data = await res.json();
                     if (!res.ok) throw new Error(data.error || 'Failed to save limits');
-                    setLimitMessage('Trade value limit saved to SQLite and enforced server-side.');
+                    setLimitMessage('Trade value and profit target saved to SQLite and enforced server-side.');
                     onRefreshGlobal?.();
                   } catch (err: any) {
                     setLimitMessage(err.message || 'Failed to save limits');

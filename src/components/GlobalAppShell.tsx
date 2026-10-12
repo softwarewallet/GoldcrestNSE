@@ -4,6 +4,7 @@ import {
   Grid2X2, ListChecks, Settings, Sparkles, TrendingUp, Activity, History as HistoryIcon, Database
 } from 'lucide-react';
 import { IndianSessionState } from '../markets/common/types';
+import { TradingFooter } from './TradingFooter';
 
 interface GlobalAppShellProps {
   activeTab: string;
@@ -15,6 +16,7 @@ interface GlobalAppShellProps {
 }
 
 const nav = [
+  { id: 'dashboard', label: 'Dashboard', icon: Grid2X2 },
   { id: 'trading', label: 'Positions', icon: CandlestickChart },
   { id: 'control_center', label: 'Orders', icon: ListChecks },
   { id: 'history', label: 'History', icon: HistoryIcon },
@@ -44,9 +46,13 @@ export const GlobalAppShell: React.FC<GlobalAppShellProps> = ({
 
       <aside
         id="global_fixed_sidebar"
-        className="fixed top-[126px] bottom-9 left-0 z-[60] w-[242px] border-r border-slate-800/80 bg-[#02070d] flex flex-col"
+        style={{ width: '200px' }}
+        className="fixed top-[126px] bottom-9 left-0 z-[60] w-[200px] border-r border-slate-800/80 bg-[#02070d] flex flex-col"
       >
-        <nav className="flex-1 overflow-y-auto px-3 pt-3 pb-3">
+        <nav 
+          style={{ width: '200px' }}
+          className="flex-1 overflow-y-auto px-3 pt-3 pb-3 w-[200px]"
+        >
           <div className="space-y-[-4px]">
             {nav.map(item => {
               const Icon = item.icon;
@@ -72,60 +78,38 @@ export const GlobalAppShell: React.FC<GlobalAppShellProps> = ({
           </div>
         </nav>
 
-        <div className="px-3 pb-3 shrink-0">
-          <div className="rounded-xl bg-[#07101b] border border-slate-800/80 p-3">
+        <div 
+          style={{ width: '200px' }}
+          className="px-3 pb-3 shrink-0 w-[200px]"
+        >
+          <div 
+            style={{ padding: '5px' }}
+            className="rounded-xl bg-[#07101b] border border-slate-800/80 p-[5px]"
+          >
             <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-full bg-[#12366d] border border-blue-500/40 flex items-center justify-center text-white font-semibold">R</div>
+              <div className="w-9 h-9 rounded-full bg-[#12366d] border border-blue-500/40 flex items-center justify-center text-white font-semibold">P</div>
               <div className="min-w-0">
-                <div className="text-sm font-semibold truncate text-slate-100">Raajan P Sharrma</div>
+                <div 
+                  style={{ fontSize: '13px' }}
+                  className="text-[13px] font-semibold truncate text-slate-100"
+                >
+                  Prernaa Sharmaa
+                </div>
                 <div className="text-[11px] text-slate-400">Administrator</div>
               </div>
             </div>
-            <button type="button" className="mt-2 ml-1 text-[11px] text-slate-300 hover:text-white">Logout</button>
           </div>
         </div>
       </aside>
 
       <main
         id="global_app_content"
-        className="ml-[242px] min-h-screen pt-[126px] pb-9 bg-[#03070d] text-slate-100"
+        className="ml-[200px] min-h-screen pt-[126px] pb-9 bg-[#03070d] text-slate-100"
       >
         {children}
       </main>
 
-      <footer
-        id="global_fixed_footer"
-        className="fixed bottom-0 left-0 right-0 z-[70] h-9 border-t border-slate-800 bg-[#020c18] px-10 flex items-center gap-10 text-[12px] font-mono overflow-hidden"
-      >
-        <div className="flex items-center gap-2 whitespace-nowrap min-w-[250px]">
-          <span className="text-slate-300">NIFTY 50</span>
-          <span className="text-emerald-400 font-semibold">{getIndex('NIFTY').spot}</span>
-          <span className={getIndex('NIFTY').positive ? 'text-emerald-400' : 'text-rose-400'}>{getIndex('NIFTY').positive ? '▲' : '▼'} {getIndex('NIFTY').change}</span>
-        </div>
-        <div className="flex items-center gap-2 whitespace-nowrap min-w-[250px]">
-          <span className="text-slate-300">BANKNIFTY</span>
-          <span className="text-emerald-400 font-semibold">{getIndex('BANKNIFTY').spot}</span>
-          <span className={getIndex('BANKNIFTY').positive ? 'text-emerald-400' : 'text-rose-400'}>{getIndex('BANKNIFTY').positive ? '▲' : '▼'} {getIndex('BANKNIFTY').change}</span>
-        </div>
-        <div className="flex items-center gap-2 whitespace-nowrap min-w-[250px]">
-          <span className="text-slate-300">SENSEX</span>
-          <span className="text-emerald-400 font-semibold">{getIndex('SENSEX').spot}</span>
-          <span className={getIndex('SENSEX').positive ? 'text-emerald-400' : 'text-rose-400'}>{getIndex('SENSEX').positive ? '▲' : '▼'} {getIndex('SENSEX').change}</span>
-        </div>
-        <div className="flex items-center gap-2 whitespace-nowrap min-w-[250px]">
-          <span className="text-slate-300">FINNIFTY</span>
-          <span className="text-emerald-400 font-semibold">{getIndex('FINNIFTY').spot}</span>
-          <span className={getIndex('FINNIFTY').positive ? 'text-emerald-400' : 'text-rose-400'}>{getIndex('FINNIFTY').positive ? '▲' : '▼'} {getIndex('FINNIFTY').change}</span>
-        </div>
-        <div className="ml-auto flex items-center gap-2 whitespace-nowrap">
-          <span className={`w-2 h-2 rounded-full ${
-            indianSession.isOpen ? 'bg-emerald-500' : 'bg-amber-500'
-          }`} />
-          <span className={indianSession.isOpen ? 'text-emerald-400' : 'text-amber-400'}>
-            {indianSession.isOpen ? 'Market is Open' : 'Market is Closed'}
-          </span>
-        </div>
-      </footer>
+      <TradingFooter />
     </div>
   );
 };
